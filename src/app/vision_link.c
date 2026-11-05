@@ -4,7 +4,7 @@
   * @brief   视觉链路：USART3 A5 帧收发、XOR、ACK、心跳失联、重试与追踪看门狗。
   *
   * 中断内只做字节状态机、XOR、大端转换与 volatile 更新；
-  * ACK、命令、重发和 0x14 位姿全部在任务上下文发送。
+  * ACK、命令与重发全部在任务上下文发送。
   * 本文件不调用任何底盘/机械臂接口，失联与追踪丢失只通过事件上报。
   ******************************************************************************
   */
@@ -98,11 +98,6 @@ static uint8_t  s_loss_count;
 static uint8_t  s_loss_reported;
 static uint8_t  s_loss5_reported;
 static uint32_t s_loss_next_ms;
-static int16_t  s_pose_x;
-static int16_t  s_pose_y;
-static int16_t  s_pose_z;
-static uint8_t  s_pose_pending;
-static uint32_t s_pose_last_tx_ms;
 static uint8_t  s_update_tx_left;
 
 /* 事件环，只在任务上下文生产/消费 */
@@ -117,14 +112,6 @@ static volatile Vision_LinkStats_t s_stats;
 static uint16_t vision_get_be16(const uint8_t *p)
 {
     return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
-}
-
-static void vision_put_be16(uint8_t *p, int16_t v)
-{
-    uint16_t u = (uint16_t)v;
-
-    p[0] = (uint8_t)(u >> 8);
-    p[1] = (uint8_t)u;
 }
 
 static uint8_t vision_zone_cmd(Vision_Zone_e zone, uint8_t base)
@@ -305,7 +292,6 @@ static uint8_t vision_ack_exempt(uint8_t cmd)
     case VISION_CMD_D_TRACK_OFFSET:
     case VISION_CMD_HEARTBEAT:
     case VISION_CMD_ACK:
-    case VISION_CMD_TCP_POSE:
         return 1U;
     default:
         return 0U;
@@ -399,7 +385,7 @@ static void vision_frame_dispatch(uint8_t cmd, uint8_t len, const uint8_t *data)
         return;
     }
 
-    if ((cmd == VISION_CMD_ACK) || (cmd == VISION_CMD_TCP_POSE))
+    if (cmd == VISION_CMD_ACK)
     {
         s_stats.err_unexpected++;
         return;
@@ -665,8 +651,6 @@ static void vision_abort_all(void)
         s_track_active = VISION_TRACK_NONE;
         vision_track_reset_loss();
     }
-
-    s_pose_pending = 0U;
 
     taskENTER_CRITICAL();
     for (i = 0U; i < VISION_ACK_WORDS; i++)
@@ -1000,39 +984,6 @@ static void vision_ack_flush(void)
     }
 }
 
-static void vision_pose_service(uint32_t now)
-{
-    uint8_t data[6];
-    int ret;
-
-    if (s_pose_pending == 0U)
-    {
-        return;
-    }
-
-    if ((int32_t)(now - s_pose_last_tx_ms) < (int32_t)VISION_LINK_POSE_MIN_INTERVAL_MS)
-    {
-        return;
-    }
-
-    vision_put_be16(&data[0], s_pose_x);
-    vision_put_be16(&data[2], s_pose_y);
-    vision_put_be16(&data[4], s_pose_z);
-
-    ret = vision_update_send(VISION_CMD_TCP_POSE, data, 6U);
-
-    if (ret == VISION_LINK_OK)
-    {
-        s_pose_last_tx_ms = now;
-        s_pose_pending = 0U;
-    }
-    else if (ret == VISION_LINK_ERR_UART)
-    {
-        /* 位姿不重要，故障时丢弃，避免每拍反复阻塞 */
-        s_pose_pending = 0U;
-    }
-}
-
 /* ===================== 对外接口 ===================== */
 
 static void vision_stats_clear(void)
@@ -1090,11 +1041,6 @@ void Vision_Link_Init(void)
     s_track_active = VISION_TRACK_NONE;
     vision_track_reset_loss();
 
-    s_pose_x = 0;
-    s_pose_y = 0;
-    s_pose_z = 0;
-    s_pose_pending = 0U;
-    s_pose_last_tx_ms = 0U;
     s_update_tx_left = 0U;
 
     s_ev_head = 0U;
@@ -1118,7 +1064,6 @@ void Vision_Link_Update(void)
     vision_pending_service(now);
     vision_track_service(now);
     vision_ack_flush();
-    vision_pose_service(now);
 }
 
 uint8_t Vision_Link_IsOnline(void)
@@ -1370,21 +1315,6 @@ int Vision_Link_TrackStop(Vision_TrackTarget_e target)
         s_track_active = VISION_TRACK_NONE;
         vision_track_reset_loss();
     }
-
-    return VISION_LINK_OK;
-}
-
-int Vision_Link_ReportTcpPose(int16_t x_mm, int16_t y_mm, int16_t z_mm)
-{
-    if (Vision_Link_IsOnline() == 0U)
-    {
-        return VISION_LINK_ERR_OFFLINE;
-    }
-
-    s_pose_x = x_mm;
-    s_pose_y = y_mm;
-    s_pose_z = z_mm;
-    s_pose_pending = 1U;
 
     return VISION_LINK_OK;
 }

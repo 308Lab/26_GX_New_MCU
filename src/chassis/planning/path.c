@@ -55,6 +55,7 @@ static uint8_t s_rank = 1U;
 
 /* 路径空闲时的单步伺服 */
 static uint8_t  s_servo_active;
+static uint8_t  s_servo_cont;       /* 1 = 持续直行，需 ServoStop 结束 */
 static uint16_t s_servo_seq;
 static uint32_t s_servo_start_ms;
 static uint32_t s_servo_timeout_ms;
@@ -359,6 +360,7 @@ int Chassis_Path_Init(void)
     s_evq_head = 0U;
     s_evq_tail = 0U;
     s_servo_active = 0U;
+    s_servo_cont = 0U;
     s_rank = 1U;
 
     if (g_chassis_path_count > 0U)
@@ -423,6 +425,7 @@ int Chassis_Path_Start(void)
     s_seq_counter = 0U;
     s_task_done_id = 0U;
     s_servo_active = 0U;
+    s_servo_cont = 0U;
 
     Chassis_Ctrl_BeginPath();
 
@@ -474,16 +477,24 @@ void Chassis_Path_Update(void)
         return;
     }
 
-    /* 路径空闲时的单步伺服：完成后发 AUX_DONE */
+    /* 路径空闲时的单步/持续伺服：完成后发 AUX_DONE */
     if (s_servo_active != 0U)
     {
         Chassis_Ctrl_GetStatus(&st);
 
+        /* 持续直行由 Chassis_Path_ServoStop() 结束；故障时走下面的兜底 */
+        if (s_servo_cont != 0U && st.fault == 0U)
+        {
+            return;
+        }
+
         if ((st.finished != 0U && st.seq == s_servo_seq)
             || (HAL_GetTick() - s_servo_start_ms) > s_servo_timeout_ms)
         {
+            float done_mm = (st.seq == s_servo_seq) ? st.dist_done_mm : 0.0f;
+
             s_servo_active = 0U;
-            path_emit(PATH_EV_AUX_DONE, 0U, 0.0f);
+            path_emit(PATH_EV_AUX_DONE, 0U, done_mm);
         }
         return;
     }
@@ -649,7 +660,63 @@ int Chassis_Path_ServoStep(int16_t forward_mm, int16_t turn_deg)
                        ? (uint32_t)(fabsf((float)forward_mm) / 120.0f * 1000.0f) + 2000U
                        : (uint32_t)(fabsf((float)turn_deg) / 60.0f * 1000.0f) + 2000U;
     s_servo_active = 1U;
+    s_servo_cont = 0U;
 
     Chassis_Ctrl_Submit(&cmd, 1U);
     return 0;
+}
+
+int Chassis_Path_ServoRun(float v_mmps)
+{
+    Chassis_Cmd_t cmd;
+    float dist;
+
+    if (s_state == PLAN_RUNNING || s_state == PLAN_WAIT_TASK || s_servo_active != 0U)
+    {
+        return -1;
+    }
+
+    if ((v_mmps == 0.0f) || (fabsf(v_mmps) > CHASSIS_V_CRUISE_MMPS))
+    {
+        return -1;
+    }
+
+    /* 足够长的定距段，实际结束由 Chassis_Path_ServoStop() 控制 */
+    dist = (v_mmps > 0.0f) ? 1000.0f : -1000.0f;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.mode = CHASSIS_MODE_STRAIGHT;
+    cmd.v_mmps = v_mmps;
+    cmd.dist_mm = dist;
+    cmd.brake_pulse = 1U;
+    cmd.seg_last = 0U;
+    cmd.seq = ++s_seq_counter;
+
+    s_servo_seq = cmd.seq;
+    s_servo_start_ms = HAL_GetTick();
+    s_servo_timeout_ms = 0xFFFFFFFFU;
+    s_servo_active = 1U;
+    s_servo_cont = 1U;
+
+    Chassis_Ctrl_Submit(&cmd, 1U);
+    return 0;
+}
+
+void Chassis_Path_ServoStop(void)
+{
+    Chassis_Status_t st;
+
+    if (s_servo_active == 0U)
+    {
+        return;
+    }
+
+    Chassis_Ctrl_Stop(1U);
+    Chassis_Ctrl_GetStatus(&st);
+
+    s_servo_active = 0U;
+    s_servo_cont = 0U;
+
+    path_emit(PATH_EV_AUX_DONE, 0U,
+              (st.seq == s_servo_seq) ? st.dist_done_mm : 0.0f);
 }

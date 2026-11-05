@@ -150,9 +150,6 @@ int Vision_Link_TrackStart(Vision_TrackTarget_e target, uint16_t hz);
 /* 停止追踪；target 与当前追踪不一致返回 ERR_STATE */
 int Vision_Link_TrackStop(Vision_TrackTarget_e target);
 
-/* 末端 TCP 位姿上报 0x14：只记最新值，Update 中最多 50Hz 发送 */
-int Vision_Link_ReportTcpPose(int16_t x_mm, int16_t y_mm, int16_t z_mm);
-
 /* 取追踪最新值；未追踪、无样本或样本年龄 >=500ms 返回 0 */
 uint8_t Vision_Link_GetTrack(Vision_TrackTarget_e target, Vision_TrackSample_t *out);
 

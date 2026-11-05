@@ -46,6 +46,9 @@ Arm_Status_e Arm_ApproachTool(int16_t dist_mm, uint16_t timeout_ms);
 /* 三舵机 PWM 位姿（ID1/ID2/ID3 = J2/J3/J4），直接下发同步帧 */
 Arm_Status_e Arm_MovePwm(const uint16_t pwm[3], uint16_t time_ms);
 
+/* 只设置腕部 J4 的 PWM（大臂/小臂保持不动） */
+Arm_Status_e Arm_SetWristPwm(uint16_t pwm, uint16_t time_ms);
+
 /* J1 底座相对旋转（度），正 = 左转 */
 Arm_Status_e Arm_MoveBaseRelative(float delta_deg);
 Arm_Status_e Arm_PickAndPlace(const Arm_Pose_t *pick,

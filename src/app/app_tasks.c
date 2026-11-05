@@ -107,8 +107,12 @@ void App_MainTask(void *argument)
         Chassis_Path_Update();
 
 #if (APP_STAGE == APP_STAGE_MISSION)
-        /* 正式模式：mission 独占路径/视觉事件 */
+        /* 正式模式：mission 独占路径/视觉事件；演示接管时交给调试层 */
         Mission_Update();
+        if (Mission_OwnsPath() == 0U)
+        {
+            App_Debug_HandlePathEvents();
+        }
 #else
         App_Debug_HandlePathEvents();
 #endif

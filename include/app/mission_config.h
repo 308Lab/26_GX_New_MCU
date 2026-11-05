@@ -19,8 +19,15 @@
 #define MISSION_LASER_MS             (3000U)   /* 激光最长 3 s */
 
 /* ===================== 2. 视觉事务超时 ===================== */
-#define MISSION_SCAN_CODE_TIMEOUT_MS (12000U)  /* 扫码 3 次事务 */
+#define MISSION_A_SCAN_SETTLE_MS     (500U)    /* 到 A 点后先停稳，再发 0x10 */
+#define MISSION_SCAN_CODE_TIMEOUT_MS (3000U)   /* 0x10 发出后 3 s 无响应判失败 */
 #define MISSION_SCAN_ORDER_MS        (4000U)   /* 扫描段 + 3 s 顺序兜底 */
+#define MISSION_ORDER_WAIT_MS        (3500U)   /* 停车后等视觉名次，含 3 s 兜底 */
+#define MISSION_RANK_DIST_MM         (150)     /* 任务物品相对区域中间的前后距离 */
+#define MISSION_MIDLINE_SPEED_MMPS   (50.0f)   /* 中位线对准的低速连续移动速度 */
+#define MISSION_MIDLINE_PERIOD_MS    (500U)    /* 中位线请求周期 */
+#define MISSION_MIDLINE_NO_RESP      (3U)      /* 连续无响应窗口数上限 */
+#define MISSION_MIDLINE_TOTAL_MS     (5000U)   /* 对准总超时 */
 #define MISSION_TRACK_TIMEOUT_MS     (5000U)   /* 单个追踪闭环 */
 #define MISSION_TRACK_RETRY          (1U)      /* 追踪失败重粗调次数 */
 #define MISSION_TRACK_CONV_SAMPLES   (3U)      /* 连续收敛样本数 */
@@ -30,9 +37,9 @@
 
 /* ===================== 3. 任务阶段超时 ===================== */
 #define MISSION_A_TRAVEL_MS          (40000U)
-#define MISSION_B_TASK_MS            (30000U)
-#define MISSION_C_TASK_MS            (25000U)
-#define MISSION_D_TASK_MS            (30000U)
+#define MISSION_B_TASK_MS            (90000U)  /* 展开+两次中位线+名次+取球放桶 */
+#define MISSION_C_TASK_MS            (60000U)  /* 展开+两次中位线+名次+伺服+激光 */
+#define MISSION_D_TASK_MS            (60000U)  /* 展开+两次中位线+名次+抓取 */
 #define MISSION_RETURN_MS            (30000U)
 #define MISSION_TOTAL_MS             (270000U)
 
@@ -41,10 +48,11 @@
 #define MISSION_C_SERVO_STEP_MS      (2000U)
 
 /* ===================== 5. 预存位（PWM，ID1/ID2/ID3） ===================== */
+#define MISSION_POSE_A_SCAN          { 1976U, 2127U, 1829U }  /* A 扫码：小臂用初始值 */
 #define MISSION_POSE_COMMON_OPEN     { 1960U, 1502U,  868U }
 #define MISSION_POSE_B_PRESET        { 1595U, 1504U, 1055U }
 #define MISSION_POSE_B_BUCKET        { 1959U, 1642U, 1004U }
-#define MISSION_POSE_C_PRESET        { 1427U, 1680U, 1914U }
+#define MISSION_POSE_C_PRESET        { 1427U, 1680U, 1864U }  /* 腕部上移约 50 PWM */
 #define MISSION_POSE_D_PRESET        { 1842U, 1642U, 1175U }
 #define MISSION_POSE_STOW            { 2206U, 2114U, 2137U }
 

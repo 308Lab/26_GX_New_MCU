@@ -25,6 +25,7 @@ typedef enum
     MISSION_STATE_C_TASK,
     MISSION_STATE_TO_D,
     MISSION_STATE_D_TASK,
+    MISSION_STATE_DEMO,      /* A 扫码失败，交给演示流程跑完 B/C/D */
     MISSION_STATE_RETURN,
     MISSION_STATE_DEGRADED,
     MISSION_STATE_DONE,
@@ -38,10 +39,15 @@ void Mission_Init(void);
 void Mission_Update(void);
 
 /* 启动/中止 */
-int  Mission_Start(void);
+int  Mission_Start(void);       /* 完整 A→B→C→D */
+int  Mission_StartToA(void);    /* 只跑到 A 点扫码完成即停 */
 void Mission_RequestAbort(void);
 
 uint8_t         Mission_IsActive(void);
+
+/* 1 = mission 消费路径/视觉事件；0 = 演示流程接管 */
+uint8_t         Mission_OwnsPath(void);
+
 Mission_State_e Mission_GetState(void);
 uint8_t         Mission_GetZone(void);
 uint8_t         Mission_GetRank(void);

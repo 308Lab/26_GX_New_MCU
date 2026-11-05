@@ -14,8 +14,8 @@
 /* ===================== 1. 帧与队列 ===================== */
 /* 视觉->MCU 最大载荷：0x23/0x26/0x33/0x43 的 dx,dy（4B） */
 #define VISION_LINK_MAX_RX_DATA              (4U)
-/* MCU->视觉 最大载荷：0x14 的 x/y/z（6B） */
-#define VISION_LINK_MAX_TX_DATA              (6U)
+/* MCU->视觉 最大载荷：0x22/0x25/0x32/0x42 的 Hz（2B） */
+#define VISION_LINK_MAX_TX_DATA              (2U)
 /* 低频帧环形队列，必须是 2 的幂 */
 #define VISION_LINK_RX_QUEUE_LEN             (8U)
 /* 事件环形队列，必须是 2 的幂 */
@@ -56,11 +56,7 @@
 #define VISION_LINK_TRACK_DEFAULT_HZ         (50U)
 #define VISION_LINK_TRACK_HZ_MAX             (200U)
 
-/* ===================== 5. 位姿上报 ===================== */
-/* 0x14 最多 50Hz，新值覆盖旧值 */
-#define VISION_LINK_POSE_MIN_INTERVAL_MS     (20U)
-
-/* ===================== 6. 协议命令号（v1.5.1） ===================== */
+/* ===================== 5. 协议命令号（v1.5.1） ===================== */
 #define VISION_CMD_HEARTBEAT                 (0xFEU)
 #define VISION_CMD_ACK                       (0xFFU)
 
@@ -69,7 +65,6 @@
 #define VISION_CMD_SCAN_CODE_OK              (0x11U)
 #define VISION_CMD_ERROR                     (0x12U)
 #define VISION_CMD_TARGET_LOST               (0x13U)
-#define VISION_CMD_TCP_POSE                  (0x14U)
 
 /* B：扫描 / 顺序 / 中位线 / 追踪 / 桶追踪 */
 #define VISION_CMD_B_SCAN                    (0x28U)

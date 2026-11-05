@@ -86,6 +86,12 @@ void App_Debug_Update(void);
 /* 每 5ms 调用一次：处理路径层事件（扫描/到点/完成） */
 void App_Debug_HandlePathEvents(void);
 
+/* 演示流程（无视觉）公共入口。正式模式扫码失败或模拟按键时接管。 */
+void    App_Debug_StartDemo(void);        /* 从起点开始完整演示 */
+void    App_Debug_StartDemoFromA(void);   /* A 点扫码失败：J1 已右转，从回正继续 */
+void    App_Debug_StopDemo(void);
+uint8_t App_Debug_IsDemoActive(void);
+
 /* 按键分发。硬约束：本函数内禁止任何阻塞调用
    （不得使用 osDelay / HAL_Delay / Chassis_Calibrate / Chassis_Path_Run /
      HAL_UART_Transmit 等）。动作只能通过非阻塞接口表达。 */

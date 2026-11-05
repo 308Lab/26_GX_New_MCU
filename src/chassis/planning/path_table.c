@@ -16,64 +16,72 @@
 #define SPIN_ALIGN() \
     { PATH_SPIN, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0U, 1U, 0U, 0U }
 
-/* 起点 -> A：分段测试版
-   直行 280 → 右转 90° → 前进 35 → 慢速左转 90° → 慢行 350 → 左转 90° → 直行 315 到 A */
+/* 起点 -> A：直走一段后停车扫码（距离为参考值，待实测） */
 static const Path_Seg_t s_start_to_A_segs[] =
 {
-    { PATH_STRAIGHT, +1, 280.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
-    { PATH_ARC,      -1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
-    SPIN_ALIGN(),
-    { PATH_STRAIGHT, +1,  55.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
-    { PATH_ARC,      +1,   0.0f, 90.0f, 200.0f, 120.0f, 0.0f,   0U, 1U, 0U, 0U },
-    SPIN_ALIGN(),
-    { PATH_STRAIGHT, +1, 370.0f,  0.0f,   0.0f, 150.0f, 0.0f,   0U, 1U, 0U, 0U },
-    { PATH_ARC,      +1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
-    SPIN_ALIGN(),
-    { PATH_STRAIGHT, +1, 315.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    { PATH_STRAIGHT, +1, 625.0f, 0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     /* A 点：停车发 ARRIVE('A')，等待任务完成通知 */
     { PATH_TASK,      0,   0.0f,  0.0f,   0.0f,   0.0f, 0.0f,   0U, 1U, 15000U, (uint8_t)'A' },
 };
 
-/* 表 1：A -> B（按键 3 触发）
-   直行 1350 → 右转 90° → 直行 380 → 右转 90° → 慢行扫描 600 */
+/* 表 1：A -> B（按键 2 / 正式与演示流程使用）
+   后退 300 → 左弧 90° → 直行 130 → 右弧 90° → 直行 340@150（减速带）
+   → 左弧 90° → 直行 → 右弧 90° → 直行 → 右弧 90° → 直行
+   → 直行到任务区中间停车
+   停车点 = 原扫描段 700 的中点（350），任务完成由 ARRIVE 通知解除。
+   距离参考原表注释（直行合计约 1680 mm），待实测。 */
 static const Path_Seg_t s_A_to_B_segs[] =
 {
     /* A 点任务完成后，出发前重新标定零偏 */
     { PATH_CALIB,     0,   0.0f,  0.0f,   0.0f,   0.0f, 0.0f,   0U, 1U, 0U, 0U },
-    { PATH_STRAIGHT, +1, 1300.0f, 0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    /* 先退出一段，再左弧转入 B 区通道 */
+    { PATH_STRAIGHT, -1, 300.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    { PATH_ARC,      +1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    SPIN_ALIGN(),
+    { PATH_STRAIGHT, +1,  110.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     { PATH_ARC,      -1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     SPIN_ALIGN(),
-    { PATH_STRAIGHT, +1, 340.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    /* 过减速带 */
+    { PATH_STRAIGHT, +1, 360.0f,  0.0f,   0.0f, 150.0f, 0.0f,   0U, 1U, 0U, 0U },
+    { PATH_ARC,      +1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    SPIN_ALIGN(),
+    { PATH_STRAIGHT, +1, 260.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     { PATH_ARC,      -1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     SPIN_ALIGN(),
-    /* 识别扫描段：慢行 700，走完后自动倒回 350 到段中心（演示模式只取中值） */
-    { PATH_SCAN,     +1, 700.0f,  0.0f,   0.0f, 100.0f, 0.0f, 300U, 1U, 0U, (uint8_t)'B' },
+    { PATH_STRAIGHT, +1, 350.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    { PATH_ARC,      -1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    SPIN_ALIGN(),
+    /* 任务区中间：原扫描段 700 的中点，停车后展开机械臂并请求视觉 */
+    { PATH_STRAIGHT, +1, 360.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    { PATH_TASK,      0,   0.0f,  0.0f,   0.0f,   0.0f, 0.0f,   0U, 1U, 30000U, (uint8_t)'B' },
 };
 
-/* 表 2：B -> C（按键 7 触发）
-   直行 1400 → 慢行扫描 700 → 倒回 350 */
+/* 表 2：B -> C（正式与演示流程使用）
+   直行 1400 → 直行 350 到任务区中间停车 */
 static const Path_Seg_t s_B_to_C_segs[] =
 {
     { PATH_STRAIGHT, +1, 1400.0f, 0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
-    { PATH_SCAN,     +1,  700.0f, 0.0f,   0.0f, 100.0f, 0.0f, 300U, 1U, 0U, (uint8_t)'C' },
+    { PATH_STRAIGHT, +1,  300.0f, 0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    { PATH_TASK,      0,   0.0f,  0.0f,   0.0f,   0.0f, 0.0f,   0U, 1U, 30000U, (uint8_t)'C' },
 };
 
-/* 表 3：C -> D（按键 7 触发）
-   直行 360 → 右转 90° → 直行 300 → 慢行扫描 500 → 倒回 250 */
+/* 表 3：C -> D（按键 7 / 正式与演示流程使用）
+   直行 305 → 右转 90° → 直行 300 → 直行 300 到任务区中间停车 */
 static const Path_Seg_t s_C_to_D_segs[] =
 {
     { PATH_STRAIGHT, +1, 305.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     { PATH_ARC,      -1,   0.0f, 90.0f, 200.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     SPIN_ALIGN(),
+    { PATH_STRAIGHT, +1, 320.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
     { PATH_STRAIGHT, +1, 300.0f,  0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
-    { PATH_SCAN,     +1, 600.0f,  0.0f,   0.0f, 100.0f, 0.0f, 300U, 1U, 0U, (uint8_t)'D' },
+    { PATH_TASK,      0,   0.0f,  0.0f,   0.0f,   0.0f, 0.0f,   0U, 1U, 30000U, (uint8_t)'D' },
 };
 
 /* 表 4：D -> 终点（按键 8 触发）
    直行 1700 */
 static const Path_Seg_t s_D_to_end_segs[] =
 {
-    { PATH_STRAIGHT, +1, 1730.0f, 0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
+    { PATH_STRAIGHT, +1, 1700.0f, 0.0f,   0.0f, 200.0f, 0.0f,   0U, 1U, 0U, 0U },
 };
 
 #define PATH_TABLE_ENTRY(name_lit, segs_arr)                                  \

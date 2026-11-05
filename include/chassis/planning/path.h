@@ -22,7 +22,7 @@ typedef enum
     PATH_ARC,            /* 弧线转弯（主用） */
     PATH_SPIN,           /* 原地旋转（窄处备用） */
     PATH_SLOW,           /* 低速直行（减速带） */
-    PATH_SCAN,           /* 识别扫描段：低速走完，倒回本段一半 */
+    PATH_SCAN,           /* 识别扫描段：低速走完，倒回本段一半（当前路径表未使用） */
     PATH_CALIB,          /* 陀螺仪零偏重标定：停车，等待校准完成 */
     PATH_TASK,           /* 任务点：停车，等待外部任务完成 */
     PATH_STOP,           /* 固定停顿 */
@@ -101,5 +101,12 @@ void Chassis_Path_SetRank(uint8_t rank);
 
 /* 路径空闲时的单步移动（C 点底盘前后伺服）：完成发 PATH_EV_AUX_DONE */
 int Chassis_Path_ServoStep(int16_t forward_mm, int16_t turn_deg);
+
+/* 路径空闲时的持续低速直行（中位线对准）：v 正=前进、负=后退，
+   一直运行到 Chassis_Path_ServoStop()。返回 0=已启动，-1=路径忙/参数错。 */
+int Chassis_Path_ServoRun(float v_mmps);
+
+/* 停止持续直行，并立即以实际位移发一次 PATH_EV_AUX_DONE */
+void Chassis_Path_ServoStop(void);
 
 #endif /* CHASSIS_PLANNING_PATH_H */

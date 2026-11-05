@@ -171,13 +171,16 @@ static uint32_t s_chain_next_ms;
 /* S14 键 3：张爪 → 摆臂 → 到 A → J1 右转 90° → 扫码 */
 static const float s_a_scan_q[4] = { 0.0f, 150.44f, 164.28f, 36.45f };
 /* 应急模式：A 扫码姿态 PWM（J2/J3/J4），直接下发、不等回读 */
-static const uint16_t s_a_scan_pwm[3] = { 1976U, 2023U, 1829U };
+static const uint16_t s_a_scan_pwm[3] __attribute__((unused)) = { 1976U, 2127U, 1829U };
 static uint8_t  s_a_arm_flow;      /* 1 = 流程激活 */
 static uint8_t  s_a_arm_state;     /* 3=等夹爪张开，0=等路径DONE，1=等J1转向，2=已完成 */
 static uint32_t s_a_gripper_ms;
 static uint32_t s_a_j1_start_ms;
 #define APP_A_GRIPPER_MS   (800U)   /* 夹爪张开时间 */
 #define APP_A_J1_MOVE_MS   (4000U)  /* J1 转 90° 约 3.5 s，留余量 */
+
+/* S14 键 1：到 A 后发一次扫码指令 */
+static uint8_t  s_key1_scan;
 
 /* S14 键 9：演示模式 A→B→C→D 全流程 */
 static uint8_t  s_full_flow;
@@ -204,6 +207,40 @@ static const uint16_t s_pose_stow[3]     = { 2206U, 2114U, 2137U };
 #define DEMO_J1_180_MS     (8000U)  /* J1 转 180° 约 7 s */
 #define DEMO_LASER_MS      (2000U)  /* 演示模式激光 2 s */
 
+void App_Debug_StartDemo(void)
+{
+    (void)Arm_Release();
+    (void)Arm_SetWristPwm(1559U, DEMO_ARM_MS);
+
+    s_full_flow = 1U;
+    s_full_state = 1U;
+    s_full_t_ms = HAL_GetTick() + DEMO_ARM_MS + DEMO_GAP_MS;
+    s_full_fb_ms = HAL_GetTick();
+
+    (void)Chassis_Path_SelectById(0U);
+    (void)Chassis_Path_Start();
+}
+
+void App_Debug_StartDemoFromA(void)
+{
+    /* A 点回收已由 mission 启动，这里直接选表 1 继续演示 */
+    s_full_flow = 1U;
+    s_full_state = 5U;
+    s_full_t_ms = HAL_GetTick();
+    s_full_fb_ms = HAL_GetTick();
+}
+
+void App_Debug_StopDemo(void)
+{
+    s_full_flow = 0U;
+    s_full_state = 39U;
+}
+
+uint8_t App_Debug_IsDemoActive(void)
+{
+    return s_full_flow;
+}
+
 void App_Debug_HandlePathEvents(void)
 {
     Path_Event_t ev;
@@ -216,13 +253,25 @@ void App_Debug_HandlePathEvents(void)
         {
             if (s_full_flow != 0U && ev.point_id == (uint8_t)'A')
             {
-                /* A 点：立即放行路径，机械臂动作并行执行 */
+                /* A 点：立即放行路径；不动 J1，只做闭爪 + 收起 */
                 (void)Chassis_Path_NotifyTaskDone((uint8_t)'A');
                 s_full_t_ms = HAL_GetTick();
-                s_full_state = 2U;
+                s_full_state = 4U;
+            }
+            else if (s_full_flow != 0U)
+            {
+                /* 演示流程的 B/C/D 任务点：当拍放行，与正式模式一致 */
+                (void)Chassis_Path_NotifyTaskDone(ev.point_id);
             }
             else
             {
+                if (s_key1_scan != 0U && ev.point_id == (uint8_t)'A')
+                {
+                    /* 键 1：到 A、展开完成后发一次扫码指令 */
+                    s_key1_scan = 0U;
+                    (void)Vision_Link_RequestScanCode();
+                }
+
                 s_task_point = ev.point_id;
                 s_task_pending = 1U;
                 s_task_done_at = HAL_GetTick() + APP_DEBUG_TASK_MS;
@@ -318,32 +367,11 @@ void App_Debug_Update(void)
         case 1U:  /* 等表 0 DONE（摆臂完成后） */
             break;
 
-        case 2U:  /* A：J1 右转 90°，停 2 s */
-            if ((int32_t)(now - s_full_t_ms) >= 0)
-            {
-                (void)Arm_Debug_StepJog(-90.0f);
-                s_full_t_ms = now + DEMO_J1_90_MS + DEMO_GAP_MS;
-                s_full_state = 3U;
-            }
-            break;
-
-        case 3U:  /* A：J1 回正 */
-            if ((int32_t)(now - s_full_t_ms) >= 0)
-            {
-                (void)Arm_Debug_StepJog(90.0f);
-                s_full_t_ms = now + DEMO_J1_90_MS + DEMO_GAP_MS;
-                s_full_state = 4U;
-            }
-            break;
-
-        case 4U:  /* A：闭爪 + 收起 */
-            if ((int32_t)(now - s_full_t_ms) >= 0)
-            {
-                (void)Arm_Debug_Gripper(1U);
-                (void)Arm_Debug_MovePwm(s_pose_stow, DEMO_ARM_MS);
-                s_full_t_ms = now + DEMO_ARM_MS + DEMO_GAP_MS;
-                s_full_state = 5U;
-            }
+        case 4U:  /* A：不动 J1，启动闭爪 + 收起，同时前往 B（不等待回收） */
+            (void)Arm_Close();
+            (void)Arm_MovePwm(s_pose_stow, DEMO_ARM_MS);
+            s_full_t_ms = now;
+            s_full_state = 5U;
             break;
 
         case 5U:  /* A：前往 B */
@@ -770,10 +798,22 @@ void App_Debug_HandleKey(uint8_t key)
     }
 
 #if (APP_STAGE == APP_STAGE_MISSION)
-    /* 正式模式：9 = 启动，6 = 中止，其余调试键禁用 */
+    /* 正式模式：9 = 启动，8 = 只到 A，7 = 模拟扫码失败跑演示，6 = 中止 */
     if (key == (uint8_t)'9')
     {
         (void)Mission_Start();
+    }
+    else if (key == (uint8_t)'8')
+    {
+        (void)Mission_StartToA();
+    }
+    else if (key == (uint8_t)'7')
+    {
+        /* 从起点直接跑演示流程，用于模拟 A 点扫码失败；仅空闲时可启动 */
+        if (Mission_GetState() == MISSION_STATE_IDLE)
+        {
+            App_Debug_StartDemo();
+        }
     }
     else if (key == (uint8_t)'6')
     {
@@ -1020,14 +1060,22 @@ void App_Debug_HandleKey(uint8_t key)
 
     case DEBUG_STEP_S14:
     {
-        /* 按键映射（4/5 硬件不可用）：
-           1 = 起点→A（纯底盘），2 = A→B，3 = 起点→A + 机械臂扫码流程，
-           7 = C→D，8 = D→终点，9 = 整链，6 = 中止 */
+        /* 按键映射（4 硬件不可用）：
+           1 = 起点→A（表 0），2 = A→B（表 1），
+           3 = 起点→A + 机械臂扫码流程，5 = 纯底盘整链，
+           6 = 中止，7 = C→D（表 3），8 = D→终点（表 4），9 = 演示整链 */
         uint16_t table_id = 0xFFFFU;
 
         switch (key)
         {
-        case (uint8_t)'1': table_id = 0U; break;
+        case (uint8_t)'1':
+            /* 跑到 A 并展开：张爪 + 腕部平伸，随后发车表 0 */
+            (void)Arm_Debug_Gripper(0U);
+            (void)Arm_SetWristPwm(1559U, DEMO_ARM_MS);
+            s_key1_scan = 1U;
+            table_id = 0U;
+            break;
+
         case (uint8_t)'2': table_id = 1U; break;
 
         case (uint8_t)'3':
@@ -1054,20 +1102,12 @@ void App_Debug_HandleKey(uint8_t key)
         case (uint8_t)'7': table_id = 3U; break;
 
         case (uint8_t)'8':
-            /* 调试：持续直走 3000 mm */
-            Chassis_Debug_RunStraight(3000.0f, 200.0f);
+            /* D→终点（表 4），与正式模式路径一致 */
+            table_id = 4U;
             break;
 
         case (uint8_t)'9':
-            /* 应急模式全流程：张爪 + PWM 直接摆臂（不等回读），立即发车表 0 */
-            (void)Arm_Debug_Gripper(0U);
-            (void)Arm_Debug_MovePwm(s_a_scan_pwm, DEMO_ARM_MS);
-            s_full_flow = 1U;
-            s_full_state = 1U;
-            s_full_t_ms = HAL_GetTick() + DEMO_ARM_MS + DEMO_GAP_MS;
-            s_full_fb_ms = HAL_GetTick();
-            (void)Chassis_Path_SelectById(0U);
-            (void)Chassis_Path_Start();
+            App_Debug_StartDemo();
             break;
 
         case (uint8_t)'6':

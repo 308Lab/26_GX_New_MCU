@@ -415,6 +415,12 @@ Arm_Status_e Arm_MoveBaseRelative(float delta_deg)
     return Arm_Debug_StepJog(delta_deg);
 }
 
+Arm_Status_e Arm_SetWristPwm(uint16_t pwm, uint16_t time_ms)
+{
+    return (Arm_Servo_SetPwm((uint8_t)ARM_SERVO_ID_J4, pwm, time_ms) == 0)
+         ? ARM_OK : ARM_ERR_COMM;
+}
+
 Arm_Status_e Arm_MovePwm(const uint16_t pwm[3], uint16_t time_ms)
 {
     const uint8_t ids[3] = {
