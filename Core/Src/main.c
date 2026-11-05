@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "app/app_init.h"
 #include "app/app_tasks.h"
+#include "common/fault.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -63,28 +64,32 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t MainTask02Handle;
 const osThreadAttr_t MainTask02_attributes = {
   .name = "MainTask02",
-  .stack_size = 128 * 4,
+  /* 审计 H8：512B 栈里跑键扫描+调试字符串拼接+mission 状态机，太紧 */
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for CarTask */
 osThreadId_t CarTaskHandle;
 const osThreadAttr_t CarTask_attributes = {
   .name = "CarTask",
-  .stack_size = 128 * 4,
+  /* 审计 H8：控制环 float 运算，512B 偏紧 */
+  .stack_size = 192 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* Definitions for EncTask */
 osThreadId_t EncTaskHandle;
 const osThreadAttr_t EncTask_attributes = {
   .name = "EncTask",
-  .stack_size = 128 * 4,
+  /* 审计 H8：编码器/陀螺处理，512B 偏紧 */
+  .stack_size = 192 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* Definitions for OLEDTask */
 osThreadId_t OLEDTaskHandle;
 const osThreadAttr_t OLEDTask_attributes = {
   .name = "OLEDTask",
-  .stack_size = 128 * 4,
+  /* 审计 H8：软 I2C 刷屏 + 每行字符串拼接，512B 溢出风险最高 */
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
@@ -165,6 +170,10 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
+  /* 审计 H8/H9：先把上次复位原因（栈溢出/内存失败/HardFault/看门狗）从
+     BKP 备份寄存器读出来并清零，App_Debug_Refresh() 会把它显示在 OLED 上 */
+  Fault_Init();
+
   App_Init();
   /* USER CODE END 2 */
 
@@ -809,11 +818,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+  /* HAL 初始化失败（时钟/外设/中断配置）：记下故障码后复位。
+     连续 3 次都走到这里就改为停机，避免初始化阶段死循环复位
+     （计数在 Watchdog_Start() 里清零）。 */
+  Fault_Fatal(FAULT_CODE_ERROR_HANDLER);
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT

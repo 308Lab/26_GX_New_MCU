@@ -12,6 +12,7 @@
 #include "arm/arm_debug.h"
 #include "arm/arm_config.h"
 #include "chassis/chassis.h"
+#include "common/fault.h"
 #include "common/keypad.h"
 #include "common/oled.h"
 #include "main.h"
@@ -2051,7 +2052,8 @@ static void chassis_s3_refresh(void)
     Oled_Flush();
 }
 
-void App_Debug_Refresh(void)
+/* 原来的刷新函数体（改名后由 App_Debug_Refresh() 包一层，见文件末尾） */
+static void debug_refresh_body(void)
 {
     if (App_Debug_GetStep() == DEBUG_STEP_S3)
     {
@@ -2285,4 +2287,34 @@ void App_Debug_Refresh(void)
     Oled_DrawStrLine(7U, line);
 
     Oled_Flush();
+}
+
+void App_Debug_Refresh(void)
+{
+    debug_refresh_body();
+
+    /* 审计 H8/H9：上次复位前的故障记录（栈溢出 / 内存申请失败 / HardFault /
+       看门狗超时）由 Fault_Init() 在开机时从 BKP 读出并清零，这里贴在最后
+       一行显示。本板没有 LED，OLED 是唯一的人眼可见通道。
+       记录非空说明「上一次运行是异常结束的」，正常上电这一行不会出现。 */
+    if (Fault_GetLastCode() != 0U)
+    {
+        char        line[DEBUG_LINE_MAX];
+        char        num[16];
+        char       *p = line;
+        const char *who = Fault_GetLastTaskName();
+
+        App_Dbg_FmtInt(num, (int32_t)Fault_GetLastCode());
+        p = dbg_stpcpy(p, "FAULT");
+        p = dbg_stpcpy(p, num);
+        if (who[0] != '\0')
+        {
+            p = dbg_stpcpy(p, " ");
+            p = dbg_stpcpy(p, who);
+        }
+        *p = '\0';
+
+        Oled_DrawStrLine(OLED_PAGES - 1U, line);
+        Oled_Flush();
+    }
 }
