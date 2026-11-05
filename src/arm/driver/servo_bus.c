@@ -12,6 +12,8 @@
 #include "common/uart_rx.h"
 #include "main.h"
 
+#include "cmsis_os.h"
+
 extern UART_HandleTypeDef huart4;
 
 #define SERVO_SLOT_NUM      (3U)
@@ -66,6 +68,11 @@ static uint8_t s_scan_ids[SERVO_SCAN_MAX];
 static char    s_line[SERVO_LINE_MAX];
 static uint8_t s_line_len;
 static uint8_t s_line_active;
+
+/* 审计 H10：UART4 是半双工总线，方向切换 + 发送 + 回切必须整段互斥，
+   否则 ArmTask 与 MainTask02 会穿插字节。内核起来前为 NULL，此时单任务
+   初始化流程独占总线，不加锁也安全。 */
+static osMutexId_t s_tx_mutex;
 
 static int8_t servo_slot_of_id(uint8_t id)
 {
@@ -214,6 +221,13 @@ static int servo_send(const char *buf, uint16_t len)
 {
     HAL_StatusTypeDef st;
 
+    /* 整段「切到发送 → 发字节 → 切回接收」持锁（审计 H10）。
+       切成发送后立刻被打断会让另一条指令的字节混进同一帧。 */
+    if (s_tx_mutex != NULL)
+    {
+        (void)osMutexAcquire(s_tx_mutex, osWaitForever);
+    }
+
     servo_set_dir(1U);
     HAL_Delay(ARM_SERVO_SWITCH_DELAY_MS);
 
@@ -222,7 +236,21 @@ static int servo_send(const char *buf, uint16_t len)
     servo_set_dir(0U);
     HAL_Delay(ARM_SERVO_SWITCH_DELAY_MS);
 
+    if (s_tx_mutex != NULL)
+    {
+        (void)osMutexRelease(s_tx_mutex);
+    }
+
     return (st == HAL_OK) ? 0 : -1;
+}
+
+void Arm_Servo_InitRtos(void)
+{
+    /* 必须在 osKernelInitialize() 之后调用（见 app_init.c） */
+    if (s_tx_mutex == NULL)
+    {
+        s_tx_mutex = osMutexNew(NULL);
+    }
 }
 
 static char *put_u3(char *p, uint16_t v)
@@ -402,6 +430,14 @@ int Arm_Servo_GetPositionPwm(uint8_t id, uint16_t *pwm)
 
     *pwm = s_any_pwm;
     return 0;
+}
+
+uint32_t Arm_Servo_GetRxStampMs(uint8_t id)
+{
+    int8_t slot = servo_slot_of_id(id);
+
+    /* 0 = 从未收到回读应答（H11 用它区分「新回读」和缓存里的旧值） */
+    return (slot < 0) ? 0U : s_last_rx_ms[slot];
 }
 
 void Arm_Servo_Torque(uint8_t id, uint8_t on)

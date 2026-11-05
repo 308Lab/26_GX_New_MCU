@@ -88,7 +88,16 @@ const osThreadAttr_t OLEDTask_attributes = {
   .priority = (osPriority_t) osPriorityLow,
 };
 /* USER CODE BEGIN PV */
-
+/* 审计 B1：App_ArmTask 之前从未被创建，Arm_Update() 没人调用，机械臂整条
+   链路是死状态。周期 5 ms（CHASSIS_CTRL_PERIOD_MS），栈 1 KB。
+   优先级必须低于 CarTask（运行时被提到 osPriorityRealtime）：CarTask 抢不到
+   CPU 会直接丢控制拍。Normal 也低于 EncTask(AboveNormal)。 */
+osThreadId_t ArmTaskHandle;
+const osThreadAttr_t ArmTask_attributes = {
+  .name = "ArmTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -107,6 +116,7 @@ void StartMainTask(void *argument);
 void StartCarTask(void *argument);
 void StartEncTask(void *argument);
 void StartOLEDTask(void *argument);
+void StartArmTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -192,6 +202,9 @@ int main(void)
 
   /* creation of OLEDTask */
   OLEDTaskHandle = osThreadNew(StartOLEDTask, NULL, &OLEDTask_attributes);
+
+  /* creation of ArmTask（审计 B1） */
+  ArmTaskHandle = osThreadNew(StartArmTask, NULL, &ArmTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* 控制环提到最高优先级；运行时调整，不改生成代码中的 const osThreadAttr_t */
@@ -737,6 +750,20 @@ void StartEncTask(void *argument)
   /* USER CODE BEGIN StartEncTask */
   App_EncTask(argument);
   /* USER CODE END StartEncTask */
+}
+
+/* USER CODE BEGIN Header_StartArmTask */
+/**
+* @brief Function implementing the ArmTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartArmTask */
+void StartArmTask(void *argument)
+{
+  /* USER CODE BEGIN StartArmTask */
+  App_ArmTask(argument);
+  /* USER CODE END StartArmTask */
 }
 
 /* USER CODE BEGIN Header_StartOLEDTask */

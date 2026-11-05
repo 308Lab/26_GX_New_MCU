@@ -13,6 +13,8 @@
 #include <stdint.h>
 
 void Arm_Step_Init(void);
+/* 在 osKernelInitialize() 之后调用：创建 USART1 发送互斥量（审计 H10）。 */
+void Arm_Step_InitRtos(void);
 void Arm_Step_Update(void);
 
 /* 命令接口：返回 0 成功，-1 忙/参数错误。 */

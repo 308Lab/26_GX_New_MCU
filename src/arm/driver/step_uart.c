@@ -13,6 +13,8 @@
 #include "common/uart_rx.h"
 #include "main.h"
 
+#include "cmsis_os.h"
+
 extern UART_HandleTypeDef huart1;
 
 #define STEP_PENDING_NONE   (0U)
@@ -28,6 +30,10 @@ extern UART_HandleTypeDef huart1;
 #define STEP_ERR_ACK        (5U)
 
 #define STEP_FRAME_MAX      (16U)
+
+/* 审计 H10：USART1 同样由 ArmTask 与 MainTask02 共用，发送段加锁。
+   内核起来前为 NULL（初始化阶段单任务），不加锁也安全。 */
+static osMutexId_t s_tx_mutex;
 
 static uint8_t  s_rx_buf[STEP_FRAME_MAX];
 static uint8_t  s_rx_len;
@@ -175,15 +181,39 @@ static int step_begin(uint8_t pending)
 
 static int step_send(const uint8_t *buf, uint8_t len)
 {
+    int rc = 0;
+
+    if (s_tx_mutex != NULL)
+    {
+        (void)osMutexAcquire(s_tx_mutex, osWaitForever);
+    }
+
     if (HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 20U) != HAL_OK)
     {
         s_err++;
         s_last_err_kind = STEP_ERR_TX;
-        return -1;
+        rc = -1;
+    }
+    else
+    {
+        s_tx_ms = HAL_GetTick();
     }
 
-    s_tx_ms = HAL_GetTick();
-    return 0;
+    if (s_tx_mutex != NULL)
+    {
+        (void)osMutexRelease(s_tx_mutex);
+    }
+
+    return rc;
+}
+
+void Arm_Step_InitRtos(void)
+{
+    /* 必须在 osKernelInitialize() 之后调用（见 app_init.c） */
+    if (s_tx_mutex == NULL)
+    {
+        s_tx_mutex = osMutexNew(NULL);
+    }
 }
 
 void Arm_Step_Init(void)

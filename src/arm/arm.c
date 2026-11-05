@@ -15,6 +15,7 @@
 #include "arm/perception/joint_fb.h"
 #include "arm/control/arm_actuator.h"
 #include "arm/control/arm_kin.h"
+#include "arm/control/arm_limit.h"
 #include "arm/control/arm_motion.h"
 #include "arm/planning/arm_action.h"
 #include "common/math_util.h"
@@ -67,6 +68,51 @@ static float servo_zero_pwm_of(uint8_t axis)
     case ARM_AXIS_J4: return ARM_SERVO_J4_ZERO_PWM;
     default: return 1500.0f;
     }
+}
+
+/* 审计 H2：PWM 位姿入口（Arm_MovePwm / Arm_Debug_MovePwm / Arm_SetWristPwm）
+   原来只判空指针就下发，完全绕过软限位。这里把 PWM 反算成关节角再走
+   Arm_Limit_CheckJoints；越限返回 ARM_ERR_LIMIT 且不下发任何帧。
+   未参与校验的轴填「安全中间值」，避免拿 0° 去撞 J2/J3 的下限。 */
+static void arm_pwm_seed_q(float q[4])
+{
+    q[ARM_AXIS_J1] = 0.0f;
+    q[ARM_AXIS_J2] = 90.0f;
+    q[ARM_AXIS_J3] = 90.0f;
+    q[ARM_AXIS_J4] = 0.0f;
+}
+
+static float arm_pwm_to_q(uint8_t axis, uint16_t pwm)
+{
+    return ((float)pwm - servo_zero_pwm_of(axis))
+         / servo_pwm_per_deg_of(axis) * servo_dir_of(axis);
+}
+
+static int arm_pwm_limit_ok(const uint16_t pwm[3])
+{
+    float   q[4];
+    uint8_t i;
+
+    arm_pwm_seed_q(q);
+
+    for (i = 0U; i < 3U; i++)
+    {
+        uint8_t axis = (uint8_t)(ARM_AXIS_J2 + i);
+
+        q[axis] = arm_pwm_to_q(axis, pwm[i]);
+    }
+
+    return (Arm_Limit_CheckJoints(q) == 0) ? 1 : 0;
+}
+
+static int arm_wrist_pwm_limit_ok(uint16_t pwm)
+{
+    float q[4];
+
+    arm_pwm_seed_q(q);
+    q[ARM_AXIS_J4] = arm_pwm_to_q(ARM_AXIS_J4, pwm);
+
+    return (Arm_Limit_CheckJoints(q) == 0) ? 1 : 0;
 }
 
 /* 点动目标按关节软限位检查，而不是只钳 PWM */
@@ -417,6 +463,11 @@ Arm_Status_e Arm_MoveBaseRelative(float delta_deg)
 
 Arm_Status_e Arm_SetWristPwm(uint16_t pwm, uint16_t time_ms)
 {
+    if (arm_wrist_pwm_limit_ok(pwm) == 0)
+    {
+        return ARM_ERR_LIMIT;
+    }
+
     return (Arm_Servo_SetPwm((uint8_t)ARM_SERVO_ID_J4, pwm, time_ms) == 0)
          ? ARM_OK : ARM_ERR_COMM;
 }
@@ -434,6 +485,11 @@ Arm_Status_e Arm_MovePwm(const uint16_t pwm[3], uint16_t time_ms)
         return ARM_ERR_PARAM;
     }
 
+    if (arm_pwm_limit_ok(pwm) == 0)
+    {
+        return ARM_ERR_LIMIT;
+    }
+
     return (Arm_Servo_SetPwmSync(ids, pwm, 3U, time_ms) == 0)
          ? ARM_OK : ARM_ERR_COMM;
 }
@@ -449,6 +505,11 @@ Arm_Status_e Arm_Debug_MovePwm(const uint16_t pwm[3], uint16_t time_ms)
     if (pwm == NULL)
     {
         return ARM_ERR_PARAM;
+    }
+
+    if (arm_pwm_limit_ok(pwm) == 0)
+    {
+        return ARM_ERR_LIMIT;
     }
 
     return (Arm_Servo_SetPwmSync(ids, pwm, 3U, time_ms) == 0)
