@@ -489,6 +489,112 @@ static void vision_rx_byte_isr(uint8_t byte)
 
 /* ===================== 发送 ===================== */
 
+/* 审计 H5：发送改 IT + 单生产者/单消费者环形缓冲。
+ * 生产者只有 MainTask02（命令、重发、ACK 全在该任务上下文），消费者只有
+ * USART3 的 TxCplt 中断；head 只由任务写、tail 只由中断写，两者都是单字写入，
+ * 因此不需要临界区，也就不会出现「任务持锁等 UART」的阻塞。
+ * 帧以整帧拷入缓冲，帧与帧之间不会交叉；顺序严格 FIFO，与原先逐帧阻塞发送一致。 */
+static uint8_t  s_tx_ring[VISION_LINK_TX_RING_SIZE];
+static volatile uint16_t s_tx_head;        /* 任务侧写入位置 */
+static volatile uint16_t s_tx_tail;        /* 中断侧已发/在发位置 */
+static volatile uint16_t s_tx_chunk;       /* HAL 当前正在搬的字节数 */
+static volatile uint8_t  s_tx_busy;        /* 1 = HAL 正在搬 */
+static volatile uint32_t s_tx_progress_ms; /* 最近一次进展时刻，供停滞兜底 */
+
+/* 把缓冲里待发的一段交给 HAL；只能在 s_tx_busy == 0 时调用（任务或中断均可） */
+static void vision_tx_kick(void)
+{
+    uint16_t tail = s_tx_tail;
+    uint16_t head = s_tx_head;
+    uint16_t chunk;
+
+    if ((s_tx_busy != 0U) || (tail == head))
+    {
+        return;
+    }
+
+    /* 只发到缓冲末尾，回绕的剩余部分由 TxCplt 续发 */
+    chunk = (head > tail) ? (uint16_t)(head - tail)
+                          : (uint16_t)(VISION_LINK_TX_RING_SIZE - tail);
+
+    s_tx_chunk = chunk;
+    s_tx_busy = 1U;
+    s_tx_progress_ms = HAL_GetTick();
+
+    if (HAL_UART_Transmit_IT(&huart3, &s_tx_ring[tail], chunk) != HAL_OK)
+    {
+        s_tx_busy = 0U;
+        s_tx_chunk = 0U;
+        s_stats.tx_errors++;
+    }
+}
+
+/* 入队一整帧；缓冲放不下就不入队（返回失败，帧不会被截断） */
+static int vision_tx_enqueue(const uint8_t *buf, uint16_t n)
+{
+    uint16_t used;
+    uint16_t i;
+    uint16_t mask = (uint16_t)(VISION_LINK_TX_RING_SIZE - 1U);
+
+    used = (uint16_t)((s_tx_head - s_tx_tail) & mask);
+    if ((uint16_t)(mask - used) < n)
+    {
+        s_stats.tx_errors++;
+        return VISION_LINK_ERR_UART;
+    }
+
+    for (i = 0U; i < n; i++)
+    {
+        s_tx_ring[(uint16_t)((s_tx_head + i) & mask)] = buf[i];
+    }
+    __DMB();                 /* 先写完字节，再发布 head */
+    s_tx_head = (uint16_t)((s_tx_head + n) & mask);
+
+    vision_tx_kick();
+
+    return VISION_LINK_OK;
+}
+
+/* TxCplt：推进 tail 并续发下一段。只由 USART3 中断调用 */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    uint16_t mask = (uint16_t)(VISION_LINK_TX_RING_SIZE - 1U);
+
+    if ((huart == NULL) || (huart->Instance != USART3) || (s_tx_busy == 0U))
+    {
+        return;
+    }
+
+    s_tx_tail = (uint16_t)((s_tx_tail + s_tx_chunk) & mask);
+    s_tx_chunk = 0U;
+    s_tx_busy = 0U;
+    s_tx_progress_ms = HAL_GetTick();
+
+    vision_tx_kick();
+}
+
+/* 停滞兜底：IT 因错误被 HAL 终结时不会再回调 TxCplt，这里强制复位，
+ * 丢掉本轮未发完的半帧（上位机按 XOR 校验丢帧，下一帧仍从 0xA5 重新同步） */
+static void vision_tx_stall_service(uint32_t now)
+{
+    if ((s_tx_busy != 0U)
+        && ((uint32_t)(now - s_tx_progress_ms) > VISION_LINK_TX_STALL_MS))
+    {
+        (void)HAL_UART_AbortTransmit(&huart3);
+        s_tx_tail = (uint16_t)((s_tx_tail + s_tx_chunk)
+                               & (uint16_t)(VISION_LINK_TX_RING_SIZE - 1U));
+        s_tx_chunk = 0U;
+        s_tx_busy = 0U;
+        s_stats.tx_errors++;
+    }
+
+    /* 缓冲里有数据但没人搬（例如上一段刚结束、入队发生在 kick 之后）：补一脚 */
+    if (s_tx_busy == 0U)
+    {
+        vision_tx_kick();
+    }
+}
+
 static int vision_send_raw(uint8_t cmd, const uint8_t *data, uint8_t len)
 {
     uint8_t buf[VISION_LINK_MAX_TX_DATA + 4U];
@@ -516,13 +622,8 @@ static int vision_send_raw(uint8_t cmd, const uint8_t *data, uint8_t len)
 
     s_stats.tx_frames++;
 
-    if (HAL_UART_Transmit(&huart3, buf, n, VISION_LINK_UART_TX_TIMEOUT_MS) != HAL_OK)
-    {
-        s_stats.tx_errors++;
-        return VISION_LINK_ERR_UART;
-    }
-
-    return VISION_LINK_OK;
+    /* 帧格式（A5/CMD/LEN/DATA/XOR、命令号、载荷长度）完全不变，只是不再等发送完毕 */
+    return vision_tx_enqueue(buf, n);
 }
 
 /* Update 内部发送：受每拍帧数预算限制；失败后本拍不再发送 */
@@ -850,6 +951,17 @@ static void vision_pending_service(uint32_t now)
         break;
 
     case VISION_PEND_MIDLINE:
+        /* 审计 H6：pending 必须有生命周期上限，否则一旦没人 CancelMidline，
+         * 整个视觉链路会被 RequestOrder/RequestScanCode/TrackStart 的 ERR_BUSY 永久堵死。
+         * 超时只上报事件并清 pending，不重发、不停车，控制权交回业务层。 */
+        if ((int32_t)(now - s_pending.deadline_ms) >= 0)
+        {
+            vision_emit(VISION_EV_VISION_ERROR, s_pending.zone, s_pending.tx_cmd,
+                        0U, VISION_REASON_TIMEOUT, 0U);
+            vision_pending_clear();
+            break;
+        }
+
         if ((int32_t)(now - s_pending.next_tx_ms) >= 0)
         {
             ret = vision_update_send(s_pending.tx_cmd, NULL, 0U);
@@ -1019,6 +1131,13 @@ void Vision_Link_Init(void)
     s_rx_head = 0U;
     s_rx_tail = 0U;
 
+    /* 审计 H5：发送缓冲复位 */
+    s_tx_head = 0U;
+    s_tx_tail = 0U;
+    s_tx_chunk = 0U;
+    s_tx_busy = 0U;
+    s_tx_progress_ms = 0U;
+
     for (i = 0U; i < VISION_LINK_TRACK_SLOT_COUNT; i++)
     {
         s_track[i].dx_mm = 0;
@@ -1058,6 +1177,7 @@ void Vision_Link_Update(void)
 
     s_update_tx_left = VISION_LINK_TX_MAX_FRAMES_PER_UPDATE;
 
+    vision_tx_stall_service(now);
     vision_parser_timeout_service(now);
     vision_link_state_service(now);
     vision_rx_drain();
@@ -1155,7 +1275,8 @@ int Vision_Link_RequestMidline(Vision_Zone_e zone)
     s_pending.tx_error_reported = 0U;
     s_pending.tx_count = 1U;
     s_pending.next_tx_ms = now + VISION_LINK_MIDLINE_RETRY_MS;
-    s_pending.deadline_ms = 0U;
+    /* 审计 H6：绝对截止时刻（不随重发滑动），到点自动结束事务 */
+    s_pending.deadline_ms = now + VISION_LINK_MIDLINE_TIMEOUT_MS;
 
     return VISION_LINK_OK;
 }

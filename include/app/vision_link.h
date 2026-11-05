@@ -132,7 +132,9 @@ int Vision_Link_RequestScanCode(void);
 /* 开始扫描 0x28/0x38/0x48：无应答，发送即返回 */
 int Vision_Link_StartScan(Vision_Zone_e zone);
 
-/* 请求中位线判定 0x20/0x30/0x40：500ms 无回包自动重发直到结果或取消 */
+/* 请求中位线判定 0x20/0x30/0x40：500ms 无回包自动重发直到结果或取消；
+ * 2s 仍无结果则自动超时（事件 VISION_EV_VISION_ERROR + reason=TIMEOUT）并清事务，
+ * 调用方不必依赖「一定有人 CancelMidline」。 */
 int Vision_Link_RequestMidline(Vision_Zone_e zone);
 
 /* 取消中位线持续重发。取消成功返回 1，当前不是中位线事务返回 0。 */
