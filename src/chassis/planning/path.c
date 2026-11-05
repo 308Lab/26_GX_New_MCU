@@ -213,7 +213,12 @@ static void path_submit_motion(const Path_Seg_t *seg)
 
     case PATH_ARC:
         cmd.mode = CHASSIS_MODE_ARC;
-        cmd.v_mmps = (seg->dir >= 0) ? v_mag : -v_mag;
+        /* 审计 H12：弧段的线速度恒为正（沿弧长的速度大小），前进/后退
+           一侧不再由 v 的符号表达；左右转只由 radius_mm 的符号决定
+           （控制层 w_ff = v / radius，符号自然带出来），航向增量与半径同号。
+           旧代码对 dir<0 把 v 也取负，控制层的最小速度钳位再把负值翻正，
+           右弧因此拿不到减速规划。 */
+        cmd.v_mmps = v_mag;
         cmd.radius_mm = (seg->dir >= 0)
                       ? seg->radius_mm : -seg->radius_mm;
         cmd.heading_delta_deg = (seg->dir >= 0)
@@ -480,22 +485,41 @@ void Chassis_Path_Update(void)
     /* 路径空闲时的单步/持续伺服：完成后发 AUX_DONE */
     if (s_servo_active != 0U)
     {
+        uint8_t ended = 0U;
+
         Chassis_Ctrl_GetStatus(&st);
 
-        /* 持续直行由 Chassis_Path_ServoStop() 结束；故障时走下面的兜底 */
-        if (s_servo_cont != 0U && st.fault == 0U)
+        /* 审计 H14：先判「本段已结束」和「超时」，再判持续标志。
+           旧代码在 s_servo_cont != 0 且无故障时直接 return，把下面的
+           到位/超时判断全部变成死码 —— 持续直行只能靠外部 ServoStop 结束，
+           漏一次车就一直开。超时则必须显式停车后再收段。 */
+        if ((st.seq == s_servo_seq) && (st.finished != 0U || st.fault != 0U))
         {
-            return;
+            ended = 1U;
+        }
+        else if ((HAL_GetTick() - s_servo_start_ms) > s_servo_timeout_ms)
+        {
+            /* 超时：只有控制层仍在执行本段时才主动停车，避免误伤别处下发的指令 */
+            if (st.seq == s_servo_seq)
+            {
+                Chassis_Ctrl_Stop(1U);
+            }
+            ended = 1U;
+        }
+        else
+        {
+            /* 正常行驶中：持续直行由 Chassis_Path_ServoStop() 结束 */
         }
 
-        if ((st.finished != 0U && st.seq == s_servo_seq)
-            || (HAL_GetTick() - s_servo_start_ms) > s_servo_timeout_ms)
+        if (ended != 0U)
         {
             float done_mm = (st.seq == s_servo_seq) ? st.dist_done_mm : 0.0f;
 
             s_servo_active = 0U;
+            s_servo_cont = 0U;
             path_emit(PATH_EV_AUX_DONE, 0U, done_mm);
         }
+
         return;
     }
 
@@ -681,7 +705,10 @@ int Chassis_Path_ServoRun(float v_mmps)
         return -1;
     }
 
-    /* 足够长的定距段，实际结束由 Chassis_Path_ServoStop() 控制 */
+    /* 定距段：按 1000mm 名义长度给一个有限超时（审计 H14）。
+       旧值是 0xFFFFFFFF，配合 Chassis_Path_Update 里「持续直行直接 return」
+       就把超时判断变成了死码；调用方漏掉 Chassis_Path_ServoStop() 时车会
+       一路开下去。现在最坏情况是跑完 1000mm/|v| 再加 2s 余量后自动收段。 */
     dist = (v_mmps > 0.0f) ? 1000.0f : -1000.0f;
 
     memset(&cmd, 0, sizeof(cmd));
@@ -694,7 +721,8 @@ int Chassis_Path_ServoRun(float v_mmps)
 
     s_servo_seq = cmd.seq;
     s_servo_start_ms = HAL_GetTick();
-    s_servo_timeout_ms = 0xFFFFFFFFU;
+    s_servo_timeout_ms = (uint32_t)(fabsf(dist) / fabsf(v_mmps) * 1000.0f)
+                       + CHASSIS_SERVO_TIMEOUT_MARGIN_MS;
     s_servo_active = 1U;
     s_servo_cont = 1U;
 

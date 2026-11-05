@@ -64,7 +64,10 @@
 #define configTICK_RATE_HZ                       ((TickType_t)1000)
 #define configMAX_PRIORITIES                     ( 56 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)8192)
+/* 审计 H8：6 个任务的栈 + TCB 已把 8 KB heap_4 用到接近上限（原来 5 个任务
+   各 512 B 栈就很紧），栈再提到 1 KB 必然 osThreadNew 返回 NULL，而 malloc
+   失败钩子当时是空实现 → 任务静默不存在。提到 12 KB，64 KB RAM 绰绰有余。 */
+#define configTOTAL_HEAP_SIZE                    ((size_t)(12 * 1024))
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0

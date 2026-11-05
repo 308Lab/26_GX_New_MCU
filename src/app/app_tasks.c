@@ -16,6 +16,7 @@
 #include "chassis/chassis.h"
 #include "chassis/chassis_config.h"
 #include "common/keypad.h"
+#include "common/watchdog.h"
 
 #include "cmsis_os.h"
 
@@ -33,6 +34,8 @@ void App_CarTask(void *argument)
             next = osKernelGetTickCount();
         }
         next += CHASSIS_CTRL_PERIOD_MS;
+
+        Watchdog_Kick(WD_CAR);
 
         Chassis_Control_Update();
     }
@@ -52,6 +55,8 @@ void App_EncTask(void *argument)
             next = osKernelGetTickCount();
         }
         next += CHASSIS_SENSE_PERIOD_MS;
+
+        Watchdog_Kick(WD_ENC);
 
         Chassis_Sense_Update();
     }
@@ -86,6 +91,10 @@ void App_MainTask(void *argument)
 #endif
     /* 正式模式：校准完成后由按键 9 启动 Misson，不自动发车 */
 
+    /* 审计 H9：校准（唯一的长阻塞，3s）结束、系统真正跑起来了才启动 IWDG，
+       否则标定期间没人喂狗会被复位。之后由本任务每拍检查全部任务是否活着。 */
+    Watchdog_Start();
+
     next = osKernelGetTickCount();
     for (;;)
     {
@@ -94,6 +103,8 @@ void App_MainTask(void *argument)
             next = osKernelGetTickCount();
         }
         next += KEYPAD_SCAN_PERIOD_MS;
+
+        Watchdog_Kick(WD_MAIN);
 
         /* 单拍只推进一个扫描相位，立即返回 */
         Keypad_Scan();
@@ -118,6 +129,10 @@ void App_MainTask(void *argument)
 #endif
 
         /* 机械臂由独立 ArmTask 推进，不占用本任务的节拍与栈 */
+
+        /* 五个任务的喂狗槽都在窗口内才真正喂 IWDG；有一路超时就停止喂狗，
+           让 IWDG 在 ≤2s 内复位（复位前已把卡死的任务名记进 BKP） */
+        (void)Watchdog_Service();
     }
 }
 
@@ -135,6 +150,8 @@ void App_OledTask(void *argument)
             next = osKernelGetTickCount();
         }
         next += CHASSIS_DBG_PERIOD_MS;
+
+        Watchdog_Kick(WD_OLED);
 
         App_Debug_Refresh();
     }
@@ -154,6 +171,8 @@ void App_ArmTask(void *argument)
             next = osKernelGetTickCount();
         }
         next += CHASSIS_CTRL_PERIOD_MS;
+
+        Watchdog_Kick(WD_ARM);
 
         /* 机械臂状态机与阻塞串口发送都在本任务，不影响路径与键盘 */
         Arm_Update();

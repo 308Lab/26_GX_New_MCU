@@ -28,9 +28,18 @@
 #define VISION_LINK_LINK_TIMEOUT_MS          (500U)
 /* 残帧复位：115200 下一帧 <1ms，100ms 仅作异常兜底 */
 #define VISION_LINK_FRAME_TIMEOUT_MS         (100U)
-/* USART3 发送超时：沿用工程现有驱动的 20ms */
-#define VISION_LINK_UART_TX_TIMEOUT_MS       (20U)
-/* 每拍最多发送帧数（ACK + 重发 + 位姿） */
+/* 审计 H5：USART3 发送改 IT + 环形缓冲，任务侧不再等 UART 发完（原 20ms 阻塞超时已删除）。
+   下面这条只作「IT 停滞」兜底：一段 ≤6B@115200 8N1 ≈0.52ms，100ms 是 190 倍余量 */
+#define VISION_LINK_TX_STALL_MS              (100U)
+/* 发送环形缓冲（必须是 2 的幂，取模靠掩码）：整帧拷贝入队，只有放得下整帧才入队，
+   保证帧不截断、不交叉。head == tail 表示空，故实际可用 63B；最长帧 = 头/码/长/数据/校验
+   = 4 + VISION_LINK_MAX_TX_DATA(2) = 6B → 至少 10 帧，远大于单拍预算 4+2 帧 */
+#define VISION_LINK_TX_RING_SIZE             (64U)
+#if ((VISION_LINK_TX_RING_SIZE == 0U) \
+    || ((VISION_LINK_TX_RING_SIZE & (VISION_LINK_TX_RING_SIZE - 1U)) != 0U))
+#error "VISION_LINK_TX_RING_SIZE 必须是 2 的幂（发送环形缓冲用掩码取模）"
+#endif
+/* 每拍最多发送帧数（ACK + 重发 + 位姿）；改 IT 后此预算只限速，不再决定阻塞时间 */
 #define VISION_LINK_TX_MAX_FRAMES_PER_UPDATE (4U)
 /* 每拍最多 ACK 数：5B@115200 约 0.43ms */
 #define VISION_LINK_ACK_MAX_PER_UPDATE       (2U)
@@ -43,6 +52,11 @@
 #define VISION_LINK_SCAN_RESPONSE_TIMEOUT_MS (1000U)
 /* 中位线：500ms 无回包重发，可反复请求 */
 #define VISION_LINK_MIDLINE_RETRY_MS         (500U)
+/* 审计 H6：中位线 pending 生命周期上限。上位机侧 midline_reply_ttl=500ms 且以同一周期
+   重发 0x20，MCU 侧超时必须明显长于该周期，否则会把「上位机正在重试」误判成失败；
+   取 4 个重发窗口 = 2000ms，同时短于 mission 的 5s 中位线总超时，
+   保证「没人取消」时 pending 也会自己结束，不把整条视觉链路永久堵成 ERR_BUSY。 */
+#define VISION_LINK_MIDLINE_TIMEOUT_MS       (2000U)
 /* 顺序判定：3s 无回包按 1=中兜底，不停车 */
 #define VISION_LINK_ORDER_TIMEOUT_MS         (3000U)
 #define VISION_LINK_ORDER_FALLBACK_VALUE     (1U)

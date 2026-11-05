@@ -383,7 +383,12 @@ static void mission_request_order(Vision_Zone_e zone, uint32_t now)
  * 到桶等主换算仍使用 rank ±150，不受中位线微调影响。
  */
 
-/* 让底盘以低速连续前后运动；dir: -1=后退 0=停 +1=前进 */
+/* 让底盘以低速连续前后运动；dir: -1=后退 0=停 +1=前进
+ *
+ * 审计 H7：只有 Chassis_Path_ServoRun() 真正启动成功才把 dir 提交进 s_midline_dir。
+ * 原实现先把目标方向写进 s_midline_dir 再去启动，启动失败（路径层 PLAN_RUNNING 或
+ * 已有伺服段在跑时返回 -1）不回滚，下一拍开头的 if (dir == s_midline_dir) 直接放行，
+ * 于是「逻辑在走、车不动」直到 5s 总超时。现在失败即保持未驱动状态，下一拍自然重试。 */
 static void mission_midline_drive(int8_t dir)
 {
     if (dir == s_midline_dir)
@@ -396,18 +401,25 @@ static void mission_midline_drive(int8_t dir)
         /* 停止时路径层回传实际位移，记入 s_align_mm（仅记录，不参与到桶换算） */
         s_align_accum = 1U;
         Chassis_Path_ServoStop();
+        s_midline_dir = 0;
     }
 
-    s_midline_dir = dir;
+    if (dir == 0)
+    {
+        return;
+    }
 
-    if (dir != 0)
     {
         float v = (dir > 0) ? MISSION_MIDLINE_SPEED_MMPS
                             : -MISSION_MIDLINE_SPEED_MMPS;
 
         if (Chassis_Path_ServoRun(v) == 0)
         {
-            s_midline_dir = dir;
+            s_midline_dir = dir;    /* 启动成功才提交目标方向 */
+        }
+        else
+        {
+            s_midline_dir = 0;      /* 启动失败：不记方向，下一拍重试 */
         }
     }
 }

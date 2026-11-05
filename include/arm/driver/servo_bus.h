@@ -14,6 +14,8 @@
 #include <stdint.h>
 
 void Arm_Servo_Init(void);
+/* 在 osKernelInitialize() 之后调用：创建半双工总线的发送互斥量（审计 H10）。 */
+void Arm_Servo_InitRtos(void);
 void Arm_Servo_Update(void);
 
 /* 单舵机 / 多舵机同步位置写。time_ms 为舵机内部运动时间。 */
@@ -25,6 +27,10 @@ int Arm_Servo_SetPwmSync(const uint8_t *ids, const uint16_t *pwm,
 void Arm_Servo_RequestPosition(uint8_t id);
 int  Arm_Servo_GetPositionPwm(uint8_t id, uint16_t *pwm);
 void Arm_Servo_ClearPositionCache(void);
+
+/* 最近一次位置回读的时刻（HAL_GetTick），0 表示从未回读。
+   同步帧既无长度也无 ACK，上层用它确认回读真的刷新过（审计 H11）。 */
+uint32_t Arm_Servo_GetRxStampMs(uint8_t id);
 
 void Arm_Servo_Torque(uint8_t id, uint8_t on);
 uint8_t Arm_Servo_GetTorque(uint8_t id);

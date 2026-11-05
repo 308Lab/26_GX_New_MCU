@@ -22,6 +22,7 @@
 #include "stm32f1xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "common/fault.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -89,7 +90,10 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  /* 审计 H9：HardFault 时原来的实现是 __disable_irq(); while(1);——现场什么也看不到，
+     只能上调试器。现在先把故障码写进 BKP 备份寄存器再复位：
+     IWDG 也会在 ≤2s 内复位，两者都走 BKP->DR1 这条通路，开机后 OLED 会显示。 */
+  Fault_Fatal(FAULT_CODE_HARDFAULT);
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -104,7 +108,10 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  /* 审计 H9：MemManage 时原来的实现是 __disable_irq(); while(1);——现场什么也看不到，
+     只能上调试器。现在先把故障码写进 BKP 备份寄存器再复位：
+     IWDG 也会在 ≤2s 内复位，两者都走 BKP->DR1 这条通路，开机后 OLED 会显示。 */
+  Fault_Fatal(FAULT_CODE_MEMMANAGE_FAULT);
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -119,7 +126,10 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  /* 审计 H9：BusFault 时原来的实现是 __disable_irq(); while(1);——现场什么也看不到，
+     只能上调试器。现在先把故障码写进 BKP 备份寄存器再复位：
+     IWDG 也会在 ≤2s 内复位，两者都走 BKP->DR1 这条通路，开机后 OLED 会显示。 */
+  Fault_Fatal(FAULT_CODE_BUSFAULT);
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -134,7 +144,10 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  /* 审计 H9：UsageFault 时原来的实现是 __disable_irq(); while(1);——现场什么也看不到，
+     只能上调试器。现在先把故障码写进 BKP 备份寄存器再复位：
+     IWDG 也会在 ≤2s 内复位，两者都走 BKP->DR1 这条通路，开机后 OLED 会显示。 */
+  Fault_Fatal(FAULT_CODE_USAGEFAULT);
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {

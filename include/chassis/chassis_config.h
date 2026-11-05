@@ -180,6 +180,15 @@
 #define CHASSIS_CORRECT_MAX_TIMES   (2U)
 #define CHASSIS_ARRIVE_SETTLE_MS    (60U)     /* 到位后等待停稳再判完成 */
 
+/* ===== 堵转保护（审计 H13）=====
+   没有电流采样，用「目标轮速明显 + 实测几乎为零 + PWM 已饱和」判定卡死，
+   持续 CHASSIS_STALL_HOLD_MS 后按故障结束本段（ctrl_finish(fault=1)）。
+   目标门限取 60mm/s：低于它的目标在起步/末端收速度阶段天然「看着不动」。 */
+#define CHASSIS_STALL_MIN_TARGET_MMPS (60.0f)
+#define CHASSIS_STALL_SPEED_RATIO     (0.1f)  /* |v_meas| < 0.1·|v_target| */
+#define CHASSIS_STALL_PWM_RATIO       (0.9f)  /* |pwm| >= 0.9·CHASSIS_PWM_MAX */
+#define CHASSIS_STALL_HOLD_MS         (300U)  /* 连续成立多久才判故障 */
+
 /* ===================== 9. 陀螺仪 JY61P ===================== */
 #define CHASSIS_GYRO_UART_IRQ_PRIO  (6U)      /* 必须 >= 5，可被临界区屏蔽 */
 #define CHASSIS_GYRO_TIMEOUT_MS     (200U)
@@ -210,6 +219,10 @@
 #define CHASSIS_PLAN_MAX_SEGS       (32U)
 #define CHASSIS_PLAN_TIMEOUT_FACTOR (3.0f)
 #define CHASSIS_PLAN_SEG_GAP_MS     (0U)
+
+/* 持续直行（ServoRun）的有限段超时余量（审计 H14）。
+   名义段长 1000mm，理论时间 = 1000/|v| 秒，再加这个余量兜住加速与打滑。 */
+#define CHASSIS_SERVO_TIMEOUT_MARGIN_MS (2000U)
 
 /* 上电后是否自动执行 demo 路径。
    调试/标定阶段必须为 0，否则车体会自行运动。全部参数整定完再置 1。 */

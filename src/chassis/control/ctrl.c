@@ -73,6 +73,8 @@ static uint8_t  s_arrived;
 static uint32_t s_brake_start_ms;
 static uint32_t s_arrive_ms;
 static float    s_v_prev_mag;
+static uint32_t s_stall_start_ms;  /* 本轮「疑似堵转」首次成立的时刻 */
+static uint8_t  s_stall_live;      /* 1 = 当前处于疑似堵转计时中 */
 
 static void ctrl_pid_setup(Pid_t *pid, float kp, float ki, float kd,
                            float out_lim, float i_lim,
@@ -272,6 +274,62 @@ static void ctrl_finish(const Chassis_Odom_State_t *odom, uint8_t fault)
     Chassis_Motor_StopAll(1U);
 }
 
+/* 单轮堵转判据：目标轮速明显、实测几乎为零、占空比已饱和。
+   没有电流采样，只能用这条纯软件判据（见审计 H13）。 */
+static uint8_t ctrl_wheel_stuck(float target_mmps, float meas_mmps, int16_t pwm)
+{
+    float mag = fabsf(target_mmps);
+    int16_t apwm = (pwm < 0) ? (int16_t)(-pwm) : pwm;
+
+    if (mag < CHASSIS_STALL_MIN_TARGET_MMPS)
+    {
+        return 0U;   /* 目标太小：起步惯性、末端收速度都可能符合「不动」 */
+    }
+    if (fabsf(meas_mmps) >= (CHASSIS_STALL_SPEED_RATIO * mag))
+    {
+        return 0U;   /* 轮子确实在转 */
+    }
+    if ((float)apwm < (CHASSIS_STALL_PWM_RATIO * (float)CHASSIS_PWM_MAX))
+    {
+        return 0U;   /* 还没顶到饱和：只是加速中或负载偏大 */
+    }
+
+    return 1U;
+}
+
+/* 堵转计时与处置。返回 1 表示本段已按故障结束（电机已停，本拍不要下发 PWM）。
+   闭环在轮子被挡住时会把占空比顶到 ±CHASSIS_PWM_MAX 一动不动，
+   以前只能等段超时（1700mm 段约 25s）才结束。 */
+static uint8_t ctrl_stall_service(float v_l_t, float v_r_t,
+                                  int16_t pwm_l, int16_t pwm_r,
+                                  const Chassis_Odom_State_t *odom)
+{
+    uint32_t now = HAL_GetTick();
+
+    if (ctrl_wheel_stuck(v_l_t, odom->v_l_mmps, pwm_l) == 0U
+        && ctrl_wheel_stuck(v_r_t, odom->v_r_mmps, pwm_r) == 0U)
+    {
+        s_stall_live = 0U;
+        return 0U;
+    }
+
+    if (s_stall_live == 0U)
+    {
+        s_stall_live = 1U;
+        s_stall_start_ms = now;
+        return 0U;
+    }
+
+    if ((now - s_stall_start_ms) < CHASSIS_STALL_HOLD_MS)
+    {
+        return 0U;
+    }
+
+    s_stall_live = 0U;
+    ctrl_finish(odom, 1U);
+    return 1U;
+}
+
 static void ctrl_arrival(const Chassis_Odom_State_t *odom)
 {
     s_arrived = 1U;
@@ -464,13 +522,18 @@ static void ctrl_run_arc(const Chassis_Odom_State_t *odom,
     if (fabsf(s_cmd.radius_mm) < 1.0f)
     {
         /* 半径退化：按原地旋转处理 */
-        Chassis_Kin_Arc(s_cmd.v_mmps, s_cmd.radius_mm, v_l, v_r);
+        Chassis_Kin_Arc(fabsf(s_cmd.v_mmps), s_cmd.radius_mm, v_l, v_r);
         s_last_w_cmd = 0.0f;
     }
     else
     {
-        /* 圆弧减速规划：按剩余角度收缩目标线速度，避免外侧轮惯性冲过头 */
-        v_target = s_cmd.v_mmps;
+        /* 圆弧减速规划：按剩余角度收缩目标线速度，避免外侧轮惯性冲过头。
+           审计 H12：这里的 v 只是弧长方向的线速度大小，转向完全由
+           radius_mm 的符号（经 w_ff）决定。旧代码直接取 s_cmd.v_mmps，
+           dir<0 的右弧拿到负速度，下面的最小速度钳位把负值翻成正的
+           CHASSIS_ARC_V_MIN_MMPS ⇒ v_allow < v_target 恒不成立，
+           右弧既没有减速规划、速度还被动降到最小速度。 */
+        v_target = fabsf(s_cmd.v_mmps);
 
         if (s_arc_valid != 0U)
         {
@@ -704,6 +767,12 @@ void Chassis_Ctrl_Update(void)
     pwm_r = ctrl_speed_output(&s_pid_vr, v_r_t,
                               odom.v_r_mmps, dt_s, CHASSIS_SPEED_FF_R);
 
+    /* 审计 H13：堵转保护。ctrl_finish 内部会上报 fault 并停车，本拍不再下发 */
+    if (ctrl_stall_service(v_l_t, v_r_t, pwm_l, pwm_r, &odom) != 0U)
+    {
+        return;
+    }
+
     Chassis_Motor_SetOutput(CHASSIS_MOTOR_LEFT, pwm_l);
     Chassis_Motor_SetOutput(CHASSIS_MOTOR_RIGHT, pwm_r);
 
@@ -867,6 +936,7 @@ void Chassis_Ctrl_Stop(uint8_t brake)
     s_active = 0U;
     s_braking = 0U;
     s_arrived = 0U;
+    s_stall_live = 0U;   /* 停止后清堵转计时，新指令重新开始计时 */
 
     if (s_q_cmd != NULL)
     {

@@ -153,6 +153,17 @@
 #define ARM_STEP_SPEED_MIN_RPM      (2U)
 #define ARM_STEP_SPEED_MAX_RPM      (120U)
 
+/* 审计 H11：`{G0000#...}` 同步帧既无长度也无 ACK，`HAL_UART_Transmit` 只能
+   证明字节进了 FIFO。下发后在窗口内用 PRAD 回读位移确认帧真的被舵机接受。
+   一轮四轴轮询约 200 ms，且要求看到约 1/4 的位移，所以窗口给 900 ms（报告
+   写的 100 ms 跑不满一轮回读，做不到）。 */
+#define ARM_PTP_VERIFY_WINDOW_MS    (900U)
+#define ARM_PTP_VERIFY_MIN_PWM      (2U)     /* 目标与回读差 < 2 PWM（≈0.3°）视为无位移 */
+#define ARM_PTP_VERIFY_MIN_MOVE_PWM (20U)    /* 总位移 < 20 PWM（≈2.7°）的微动不校验 */
+
+/* 审计 H1：故障时发保持帧（目标=当前回读），50 ms 到达 */
+#define ARM_PTP_HOLD_TIME_MS        (50U)
+
 /* 默认测试位姿：S18 键 1 使用。
    (0,0,400) 竖直向上，tool_deg=91.09 使 q4≈0（腕部平伸、夹爪平行小臂）。
    数学解：q1=0, q2=51.23°, q3=39.85°, q4=0.00°；r=0 物理最大 z≈415。 */
@@ -209,7 +220,8 @@
 /* ===================== 11. 演示模式机械臂位姿（PWM） =====================
    数组顺序：ID1 / J2，ID2 / J3，ID3 / J4。2026-11-01 实测。
    演示模式 = 无视觉上位机。 */
-#define ARM_POSE_COMMON_OPEN_PWM    { 1960U, 1502U,  868U }  /* 通用左展开 */
+/* 审计 H3：J4=868 → q4≈−93.3°，越过机械端点 897（−89.4°）。改 920 → q4≈−86.3°。 */
+#define ARM_POSE_COMMON_OPEN_PWM    { 1960U, 1502U,  920U }  /* 通用左展开 */
 #define ARM_POSE_B_PRESET_PWM       { 1595U, 1504U, 1055U }  /* B 机械臂预存 */
 #define ARM_POSE_B_DEMO_PWM         { 1443U, 1642U, 1214U }  /* B 演示机械臂（取球） */
 #define ARM_POSE_B_BUCKET_DEMO_PWM  { 1756U, 1677U,  994U }  /* B 演示放置桶 */

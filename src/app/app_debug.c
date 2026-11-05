@@ -12,6 +12,7 @@
 #include "arm/arm_debug.h"
 #include "arm/arm_config.h"
 #include "chassis/chassis.h"
+#include "common/fault.h"
 #include "common/keypad.h"
 #include "common/oled.h"
 #include "main.h"
@@ -171,7 +172,8 @@ static uint32_t s_chain_next_ms;
 /* S14 键 3：张爪 → 摆臂 → 到 A → J1 右转 90° → 扫码 */
 static const float s_a_scan_q[4] = { 0.0f, 150.44f, 164.28f, 36.45f };
 /* 应急模式：A 扫码姿态 PWM（J2/J3/J4），直接下发、不等回读 */
-static const uint16_t s_a_scan_pwm[3] __attribute__((unused)) = { 1976U, 2127U, 1829U };
+/* H2 之后 2127（q3=180°）会越限，同步收到 2113；本表当前未被调用 */
+static const uint16_t s_a_scan_pwm[3] __attribute__((unused)) = { 1976U, 2113U, 1829U };
 static uint8_t  s_a_arm_flow;      /* 1 = 流程激活 */
 static uint8_t  s_a_arm_state;     /* 3=等夹爪张开，0=等路径DONE，1=等J1转向，2=已完成 */
 static uint32_t s_a_gripper_ms;
@@ -197,8 +199,9 @@ static const uint16_t s_pose_b_demo[3] DEMO_POSE_UNUSED   = ARM_POSE_B_DEMO_PWM;
 static const uint16_t s_pose_b_bucket[3] DEMO_POSE_UNUSED = ARM_POSE_B_BUCKET_DEMO_PWM;
 static const uint16_t s_pose_c[3] DEMO_POSE_UNUSED        = ARM_POSE_C_PRESET_PWM;
 static const uint16_t s_pose_d[3] DEMO_POSE_UNUSED        = ARM_POSE_D_DEMO_PWM;
-/* 收起姿态 PWM：q2=181°, q3=178°, q4=78°（新 J3 标定） */
-static const uint16_t s_pose_stow[3]     = { 2206U, 2114U, 2137U };
+/* 收起姿态 PWM：q2=181.06°, q3=177.88°, q4=78.03°（新 J3 标定）。
+   J3 由 2114 收到 2113：审计 H2 加了限位闸门后 2114（q3=178.03°）会越限被拒。 */
+static const uint16_t s_pose_stow[3]     = { 2206U, 2113U, 2137U };
 
 #define DEMO_ARM_MS        (3000U)  /* 机械臂每个 PWM 动作 3 s */
 #define DEMO_GAP_MS        (2000U)  /* 机械臂与步进之间的间隔 2 s */
@@ -2049,7 +2052,8 @@ static void chassis_s3_refresh(void)
     Oled_Flush();
 }
 
-void App_Debug_Refresh(void)
+/* 原来的刷新函数体（改名后由 App_Debug_Refresh() 包一层，见文件末尾） */
+static void debug_refresh_body(void)
 {
     if (App_Debug_GetStep() == DEBUG_STEP_S3)
     {
@@ -2283,4 +2287,34 @@ void App_Debug_Refresh(void)
     Oled_DrawStrLine(7U, line);
 
     Oled_Flush();
+}
+
+void App_Debug_Refresh(void)
+{
+    debug_refresh_body();
+
+    /* 审计 H8/H9：上次复位前的故障记录（栈溢出 / 内存申请失败 / HardFault /
+       看门狗超时）由 Fault_Init() 在开机时从 BKP 读出并清零，这里贴在最后
+       一行显示。本板没有 LED，OLED 是唯一的人眼可见通道。
+       记录非空说明「上一次运行是异常结束的」，正常上电这一行不会出现。 */
+    if (Fault_GetLastCode() != 0U)
+    {
+        char        line[DEBUG_LINE_MAX];
+        char        num[16];
+        char       *p = line;
+        const char *who = Fault_GetLastTaskName();
+
+        App_Dbg_FmtInt(num, (int32_t)Fault_GetLastCode());
+        p = dbg_stpcpy(p, "FAULT");
+        p = dbg_stpcpy(p, num);
+        if (who[0] != '\0')
+        {
+            p = dbg_stpcpy(p, " ");
+            p = dbg_stpcpy(p, who);
+        }
+        *p = '\0';
+
+        Oled_DrawStrLine(OLED_PAGES - 1U, line);
+        Oled_Flush();
+    }
 }
