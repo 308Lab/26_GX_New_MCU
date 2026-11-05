@@ -31,9 +31,14 @@
 /* 审计 H5：USART3 发送改 IT + 环形缓冲，任务侧不再等 UART 发完（原 20ms 阻塞超时已删除）。
    下面这条只作「IT 停滞」兜底：一段 ≤6B@115200 8N1 ≈0.52ms，100ms 是 190 倍余量 */
 #define VISION_LINK_TX_STALL_MS              (100U)
-/* 发送环形缓冲（必须是 2 的幂）：整帧拷贝入队，容量 64B ≥ 10 个最长帧，
-   远大于单拍预算 4+2 帧；只有放得下整帧才入队，保证帧不截断、不交叉 */
+/* 发送环形缓冲（必须是 2 的幂，取模靠掩码）：整帧拷贝入队，只有放得下整帧才入队，
+   保证帧不截断、不交叉。head == tail 表示空，故实际可用 63B；最长帧 = 头/码/长/数据/校验
+   = 4 + VISION_LINK_MAX_TX_DATA(2) = 6B → 至少 10 帧，远大于单拍预算 4+2 帧 */
 #define VISION_LINK_TX_RING_SIZE             (64U)
+#if ((VISION_LINK_TX_RING_SIZE == 0U) \
+    || ((VISION_LINK_TX_RING_SIZE & (VISION_LINK_TX_RING_SIZE - 1U)) != 0U))
+#error "VISION_LINK_TX_RING_SIZE 必须是 2 的幂（发送环形缓冲用掩码取模）"
+#endif
 /* 每拍最多发送帧数（ACK + 重发 + 位姿）；改 IT 后此预算只限速，不再决定阻塞时间 */
 #define VISION_LINK_TX_MAX_FRAMES_PER_UPDATE (4U)
 /* 每拍最多 ACK 数：5B@115200 约 0.43ms */
