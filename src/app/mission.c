@@ -880,7 +880,13 @@ static void mission_run_c(uint32_t now)
         if (s_servo_busy != 0U) break;
         {
             Vision_TrackSample_t ts;
-            if (Vision_Link_GetTrack(VISION_TRACK_C, &ts) != 0U && ts.valid != 0U)
+            /* 修复：原实现把超时判断写在「拿到有效样本」的分支里。视觉一旦不再回 0x33
+               （失联 / 目标丢失 / 追踪被停），既不会收敛也永远不会超时，case 4 只能等
+               外层 MISSION_C_TASK_MS(60s) 兜底 —— 激光始终不开，C 任务实质失败。 */
+            const uint8_t have = (Vision_Link_GetTrack(VISION_TRACK_C, &ts) != 0U)
+                                 && (ts.valid != 0U);
+
+            if (have != 0U)
             {
                 if (abs((int)ts.dy_mm) <= MISSION_SERVO_TOL_MM)
                 {
@@ -899,13 +905,15 @@ static void mission_run_c(uint32_t now)
                         }
                     }
                 }
+            }
 
-                if (s_conv >= MISSION_TRACK_CONV_SAMPLES
-                    || (HAL_GetTick() - s_sub_ms) > MISSION_TRACK_TIMEOUT_MS)
-                {
-                    (void)Vision_Link_TrackStop(VISION_TRACK_C);
-                    s_sub = 5U;
-                }
+            /* 收敛与超时都在样本判断之外：没有样本一样要能退出 */
+            if ((s_conv >= MISSION_TRACK_CONV_SAMPLES)
+                || ((uint32_t)(now - s_sub_ms) > MISSION_TRACK_TIMEOUT_MS))
+            {
+                (void)Vision_Link_TrackStop(VISION_TRACK_C);
+                s_conv = 0U;
+                s_sub = 5U;
             }
             s_t_ms = now + 200U;
         }
@@ -1315,6 +1323,15 @@ void Mission_Update(void)
             (void)Chassis_Path_NotifyTaskDone((uint8_t)'C');
             mission_enter(MISSION_STATE_C_TASK);
         }
+        else if (s_path_done != 0U)
+        {
+            /* 修复：补 path_done 兜底，与 TO_B 对称。路径表若在 C 点前
+               跑完（段类型变更 / NotifyTaskDone 错位），原实现会永久停在
+               TO_C —— 既没有 ARRIVE 也没有错误事件，只能整段任务超时。 */
+            s_path_done = 0U;
+            (void)Vision_Link_CancelPending();
+            mission_enter(MISSION_STATE_C_TASK);
+        }
         break;
 
     case MISSION_STATE_C_TASK:
@@ -1338,6 +1355,13 @@ void Mission_Update(void)
             s_path_done = 0U;
             (void)Vision_Link_CancelPending();
             (void)Chassis_Path_NotifyTaskDone((uint8_t)'D');
+            mission_enter(MISSION_STATE_D_TASK);
+        }
+        else if (s_path_done != 0U)
+        {
+            /* 修复：同 TO_C，补 path_done 兜底，防止永久停在 TO_D */
+            s_path_done = 0U;
+            (void)Vision_Link_CancelPending();
             mission_enter(MISSION_STATE_D_TASK);
         }
         break;
