@@ -38,9 +38,15 @@
 /* 每 500 ms 一帧结果，未检出就慢速前进一格（≈ v*0.5s = 25 mm），
    3 格 ≈ 75 mm 足够把目标重新拉进画面，再多容易顶上去。 */
 #define MISSION_MIDLINE_PROBE_MAX    (3U)
+/* B 段展开到位后先等扫码结果再对准：0x10 发出后最多等这么久（A 段用 3 s，
+   B 段只是「有码更好」，等太久白耽误发车，取 1.5 s） */
+#define MISSION_B_SCAN_WAIT_MS       (1500U)
 /* B 段抓取复核：重新开扫描会话→请求名次，收不到 0x2A 说明目标不在画面 = 抓到了 */
 #define MISSION_B_CHECK_SETTLE_MS    (300U)
 #define MISSION_B_CHECK_ORDER_MS     (1500U)
+/* 开扫描会话（0x28/0x38/0x48）与首次中位线请求（0x20/0x30/0x40）之间必须隔开：
+   同拍下发会在视觉还没建立扫描会话时就问中位线，且两个请求抢同一拍的发送预算。 */
+#define MISSION_SCAN_SETTLE_MS       (300U)
 
 /* v1.6 废止追踪帧（0x22-0x27/0x32-0x34/0x42-0x44），
    MISSION_TRACK_* 与 C 段底盘伺服（MISSION_SERVO_*）一并退役：

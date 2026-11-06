@@ -602,8 +602,32 @@ static void mission_run_b(uint32_t now)
 
     case 2U:
         if ((int32_t)(now - s_t_ms) < 0) break;
-        /* 完全展开（三轴 + J1 步进）完成后，先做首次中位线 */
+        /* 展开到位后先发扫码（0x10），拿到 0x11 或 1.5 s 兜底之后再开始对准。
+           ★ 以前「开始扫描 + 首次中位线」是同一拍下发的：视觉此刻还没有任务码
+             （0x11 要走几百毫秒到几秒），中位线判定只能回 0x8000「未检出」，
+             B 段于是每段白等满 MISSION_MIDLINE_TOTAL_MS 才往下走。 */
+        s_scan_result = 0U;
+        if (Vision_Link_RequestScanCode() != VISION_LINK_OK)
+        {
+            s_scan_result = 3U;   /* 发送失败按超时计一次 */
+        }
+        s_t_ms = now + MISSION_B_SCAN_WAIT_MS;
+        s_sub = 3U;
+        break;
+
+    case 3U: /* 等扫码结果（成功/失败/兜底超时都往下走） */
+        if (s_scan_result == 0U)
+        {
+            if ((int32_t)(now - s_t_ms) < 0) break;
+            s_scan_result = 3U;
+        }
         (void)Vision_Link_StartScan(VISION_ZONE_B);
+        s_t_ms = now + MISSION_SCAN_SETTLE_MS;
+        s_sub = 33U;
+        break;
+
+    case 33U: /* 扫描会话建立后隔一拍再请求中位线，避免两个请求抢同一拍预算 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
         mission_midline_start(VISION_ZONE_B, now, 1U, 0U);   /* 首次：不指定，校准车体 */
         s_sub = 32U;
         break;
