@@ -97,7 +97,7 @@ static const Path_Seg_t s_A_to_B_segs[] =
     SEG_ARC_L(90.0f, 200.0f, 200.0f), /* 左弧转入 B 区走廊 */
     SPIN_ALIGN(),
 
-    SEG_FWD(70.0f, 200.0f),          /* 第一段短直行 */
+    SEG_FWD(110.0f, 200.0f),          /* 第一段短直行 */
     SEG_ARC_R(90.0f, 200.0f, 150.0f), /* 右弧 */
     SPIN_ALIGN(),
 
@@ -105,15 +105,15 @@ static const Path_Seg_t s_A_to_B_segs[] =
     SEG_ARC_L(90.0f, 200.0f, 200.0f), /* 左弧 */
     SPIN_ALIGN(),
 
-    SEG_FWD(240.0f, 200.0f),          /* 中段直行 */
+    SEG_FWD(255.0f, 200.0f),          /* 中段直行 */
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 右弧 */
     SPIN_ALIGN(),
 
-    SEG_FWD(280.0f, 200.0f),          /* 接近任务区 */
+    SEG_FWD(350.0f, 200.0f),          /* 接近任务区 */
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 最后一个右弧，摆正朝向 */
     SPIN_ALIGN(),
 
-    SEG_FWD(360.0f, 200.0f),          /* 走到任务区中间停车 */
+    SEG_FWD(355.0f, 200.0f),          /* 走到任务区中间停车 */
     SEG_TASK('B', 30000U),            /* B 点任务：扫码 → 中位线 → 名次 → 抓取 */
 };
 
