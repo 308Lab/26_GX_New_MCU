@@ -45,11 +45,11 @@
 #define VISION_LINK_ACK_MAX_PER_UPDATE       (2U)
 
 /* ===================== 3. 请求-应答事务（协议 §6） ===================== */
-/* 扫码：1s 间隔，总共发送 3 次 */
-#define VISION_LINK_SCAN_RETRY_MS            (1000U)
-#define VISION_LINK_SCAN_MAX_TX              (3U)
-/* 扫码：最后一次发送后 1s 仍无响应判失败 */
-#define VISION_LINK_SCAN_RESPONSE_TIMEOUT_MS (1000U)
+/* 扫码：只发送 1 次，不重发 */
+#define VISION_LINK_SCAN_RETRY_MS            (1000U)   /* MAX_TX=1 时不生效，保留定义 */
+#define VISION_LINK_SCAN_MAX_TX              (1U)
+/* 扫码：发出后 3s 仍无响应判失败 */
+#define VISION_LINK_SCAN_RESPONSE_TIMEOUT_MS (3000U)
 /* 中位线：500ms 无回包重发，可反复请求 */
 #define VISION_LINK_MIDLINE_RETRY_MS         (500U)
 /* 审计 H6：中位线 pending 生命周期上限。上位机侧 midline_reply_ttl=500ms 且以同一周期

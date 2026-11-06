@@ -45,6 +45,7 @@ static uint8_t  s_align_accum;     /* 下一条 AUX_DONE 是否计入 s_align_mm
 static uint8_t  s_conv;
 static uint8_t  s_track_retry;
 static uint8_t  s_track_lost;
+static uint8_t  s_b_demo;          /* 1 = B 追踪二次失败，改走演示动作 */
 static uint8_t  s_target_down;
 static uint8_t  s_path_done;
 static uint8_t  s_link_down;
@@ -58,7 +59,9 @@ static uint8_t  s_stop_after_a;
 static const uint16_t POSE_A_SCAN[3] __attribute__((unused)) = MISSION_POSE_A_SCAN;
 static const uint16_t POSE_COMMON[3] = MISSION_POSE_COMMON_OPEN;
 static const uint16_t POSE_B[3]      = MISSION_POSE_B_PRESET;
+static const uint16_t POSE_B_DEMO[3] = MISSION_POSE_B_DEMO;
 static const uint16_t POSE_B_BUCKET[3] = MISSION_POSE_B_BUCKET;
+static const uint16_t POSE_B_BUCKET_DEMO[3] = MISSION_POSE_B_BUCKET_DEMO;
 static const uint16_t POSE_C[3]      = MISSION_POSE_C_PRESET;
 static const uint16_t POSE_D[3]      = MISSION_POSE_D_PRESET;
 static const uint16_t POSE_STOW[3]   = MISSION_POSE_STOW;
@@ -93,6 +96,7 @@ static void mission_enter(Mission_State_e st)
     s_t_ms = HAL_GetTick();
     s_conv = 0U;
     s_track_retry = 0U;
+    s_b_demo = 0U;
     s_order_ready = 0U;
     s_rank_moving = 0U;
     s_midline_got = 0U;
@@ -652,7 +656,11 @@ static void mission_run_b(uint32_t now)
                 }
                 else
                 {
-                    s_sub = 5U;   /* 放弃追踪，直接尝试抓取 */
+                    /* 第二次仍失败：B 剩余流程全部改走演示动作 */
+                    s_b_demo = 1U;
+                    (void)Arm_MovePwm(POSE_B_DEMO, MISSION_ARM_MS);
+                    s_t_ms = now + MISSION_ARM_MS;
+                    s_sub = 23U;
                 }
             }
             else
@@ -675,6 +683,20 @@ static void mission_run_b(uint32_t now)
         s_sub_ms = now;
         s_t_ms = now + 100U;
         s_sub = 4U;
+        break;
+
+    case 23U: /* 演示抓取：等取球位姿动作完成 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_Grasp();
+        s_t_ms = now + MISSION_GRIP_MS;
+        s_sub = 24U;
+        break;
+
+    case 24U: /* 演示抓取后回展开，继续正式放桶流程 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
+        s_sub = 11U;
         break;
 
     case 5U:  /* 下降抓取 */
@@ -730,7 +752,7 @@ static void mission_run_b(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_MoveBaseRelative(-180.0f);
         s_t_ms = now + MISSION_J1_180_MS + MISSION_GAP_MS;
-        s_sub = 13U;
+        s_sub = (s_b_demo != 0U) ? 25U : 13U;
         break;
 
     case 13U:
@@ -738,6 +760,27 @@ static void mission_run_b(uint32_t now)
         (void)Arm_MovePwm(POSE_B_BUCKET, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS;
         s_sub = 14U;
+        break;
+
+    case 25U: /* 演示放桶位 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_B_BUCKET_DEMO, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS;
+        s_sub = 26U;
+        break;
+
+    case 26U: /* 演示张开（释放） */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_Release();
+        s_t_ms = now + MISSION_GRIP_MS;
+        s_sub = 27U;
+        break;
+
+    case 27U: /* 演示放完后回展开，随后 J1 回正 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
+        s_sub = 20U;
         break;
 
     case 14U:
@@ -907,19 +950,26 @@ static void mission_run_c(uint32_t now)
                 }
             }
 
+            s_t_ms = now + 200U;
+
             /* 收敛与超时都在样本判断之外：没有样本一样要能退出 */
             if ((s_conv >= MISSION_TRACK_CONV_SAMPLES)
                 || ((uint32_t)(now - s_sub_ms) > MISSION_TRACK_TIMEOUT_MS))
             {
                 (void)Vision_Link_TrackStop(VISION_TRACK_C);
                 s_conv = 0U;
+                /* 就位后停 2 s 再开激光（覆盖上面的 200 ms 轮询间隔） */
+                s_t_ms = now + MISSION_GAP_MS;
                 s_sub = 5U;
             }
-            s_t_ms = now + 200U;
         }
         break;
 
     case 5U:
+        if ((int32_t)(now - s_t_ms) < 0)
+        {
+            break;   /* 就位后等待 2 s */
+        }
         s_target_down = 0U;
         (void)Arm_Laser(1U);
         s_t_ms = now + MISSION_LASER_MS;
@@ -1151,6 +1201,9 @@ static int mission_start_common(uint8_t stop_after_a)
     s_arrive_id = 0U;
     s_abort_req = 0U;
     s_stop_after_a = stop_after_a;
+    /* 启动时重置失联状态，避免上一次运行留下的旧标志立即触发降级收臂 */
+    s_link_down = 0U;
+    s_link_ms = HAL_GetTick();
 
     Chassis_Path_SetRank(1U);
     mission_enter(MISSION_STATE_PREP);
@@ -1223,9 +1276,14 @@ void Mission_Update(void)
         return;
     }
 
-    /* 失联超过 5 s：回正 + 收起 + 降级跑图 */
+    /* 失联超过 5 s：回正 + 收起 + 降级跑图。
+       A 点之前不触发：视觉离线时 A 扫码会自行失败并转演示，
+       不能因为上电时视觉还没起来就把机械臂收掉。 */
     if (s_link_down != 0U
         && (now - s_link_ms) > 5000U
+        && s_state != MISSION_STATE_PREP
+        && s_state != MISSION_STATE_A_TRAVEL
+        && s_state != MISSION_STATE_A_TASK
         && s_state != MISSION_STATE_DEGRADED
         && s_state != MISSION_STATE_DONE
         && s_state != MISSION_STATE_ERROR)

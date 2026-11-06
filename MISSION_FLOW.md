@@ -838,7 +838,7 @@ C 固定 Aim + 底盘伺服；D 追踪抓取 + 安全搬运；`Arm_NudgeTool/App
 | 0x12（任意错误码） | 与超时同样处理，直接交给演示流程 |
 | 路径 fault / 超时 | 停路径、停臂，进入 ERROR |
 
-> 3 s 由视觉层 `VISION_LINK_SCAN_RETRY_MS=1000`、`SCAN_MAX_TX=3`、`SCAN_RESPONSE_TIMEOUT_MS=1000` 共同保证（0/1/2 s 各发一帧，3 s 判失败）；mission 侧 `MISSION_SCAN_CODE_TIMEOUT_MS=3000` 作同刻兜底。
+> 扫码 `0x10` **只发一帧**（`VISION_LINK_SCAN_MAX_TX=1`），发出后 3 s 无响应判失败（`VISION_LINK_SCAN_RESPONSE_TIMEOUT_MS=3000`）；mission 侧 `MISSION_SCAN_CODE_TIMEOUT_MS=3000` 作同刻兜底。
 > 进入演示后由 `App_Debug_StartDemoFromA()` 接管：`state 3` J1 回正 → `state 4` 闭爪+收起 → `state 5` 表 1 → B/C/D 演示动作。MISSION 阶段按 `7` 可从起点直接模拟同样的演示流程。
 
 **降级（MS_DEGRADED）**

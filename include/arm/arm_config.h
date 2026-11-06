@@ -226,7 +226,7 @@
 #define ARM_POSE_B_DEMO_PWM         { 1443U, 1642U, 1214U }  /* B 演示机械臂（取球） */
 #define ARM_POSE_B_BUCKET_DEMO_PWM  { 1756U, 1677U,  994U }  /* B 演示放置桶 */
 #define ARM_POSE_B_BUCKET_PRESET_PWM { 1959U, 1642U, 1004U } /* B 放置桶机械臂预存（正式） */
-#define ARM_POSE_C_PRESET_PWM       { 1427U, 1680U, 1864U }  /* C 预存：腕部上移约 50 PWM */
+#define ARM_POSE_C_PRESET_PWM       { 1952U, 2027U, 1655U }  /* C 预存：2026-11-06 重标，腕部回调 −70 */
 #define ARM_POSE_D_PRESET_PWM       { 1842U, 1642U, 1175U }  /* D 机械臂预存 */
 #define ARM_POSE_D_DEMO_PWM         { 1619U, 1573U, 1153U }  /* D 演示机械臂 */
 

@@ -55,8 +55,10 @@
 #define MISSION_POSE_A_SCAN          { 1976U, 2113U, 1829U }  /* A 扫码：小臂用初始值 */
 #define MISSION_POSE_COMMON_OPEN     { 1960U, 1502U,  920U }
 #define MISSION_POSE_B_PRESET        { 1595U, 1504U, 1055U }
+#define MISSION_POSE_B_DEMO          { 1443U, 1642U, 1214U }  /* 追踪二次失败后的演示取球位 */
 #define MISSION_POSE_B_BUCKET        { 1959U, 1642U, 1004U }
-#define MISSION_POSE_C_PRESET        { 1427U, 1680U, 1864U }  /* 腕部上移约 50 PWM */
+#define MISSION_POSE_B_BUCKET_DEMO   { 1756U, 1677U,  994U }  /* 追踪二次失败后的演示放桶位 */
+#define MISSION_POSE_C_PRESET        { 1952U, 2027U, 1655U }  /* 2026-11-06 重标，腕部回调 −70 */
 #define MISSION_POSE_D_PRESET        { 1842U, 1642U, 1175U }
 #define MISSION_POSE_STOW            { 2206U, 2113U, 2137U }
 

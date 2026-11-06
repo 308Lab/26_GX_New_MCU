@@ -187,6 +187,9 @@ static uint8_t  s_key1_scan;
 /* S14 键 9：演示模式 A→B→C→D 全流程 */
 static uint8_t  s_full_flow;
 static uint8_t  s_full_state;
+static uint8_t  s_full_c_only;      /* 1 = 只跑 C，收起后结束 */
+static uint8_t  s_full_a_only;      /* 1 = 只跑到 A，停车后结束 */
+static uint8_t  s_c_pose_sel;       /* 0 = 下次按键到 C 展开，1 = 到 C 预存 */
 static uint32_t s_full_t_ms;
 static uint32_t s_full_fb_ms;
 static uint8_t  s_demo_read_id = 1U;
@@ -217,6 +220,25 @@ void App_Debug_StartDemo(void)
 
     s_full_flow = 1U;
     s_full_state = 1U;
+    s_full_c_only = 0U;
+    s_full_a_only = 0U;
+    s_full_t_ms = HAL_GetTick() + DEMO_ARM_MS + DEMO_GAP_MS;
+    s_full_fb_ms = HAL_GetTick();
+
+    (void)Chassis_Path_SelectById(0U);
+    (void)Chassis_Path_Start();
+}
+
+void App_Debug_StartToA(void)
+{
+    /* 纯路径到 A：张爪 + 腕部平伸，发车表 0，到 A 停车后结束 */
+    (void)Arm_Release();
+    (void)Arm_SetWristPwm(1559U, DEMO_ARM_MS);
+
+    s_full_flow = 1U;
+    s_full_state = 1U;
+    s_full_a_only = 1U;
+    s_full_c_only = 0U;
     s_full_t_ms = HAL_GetTick() + DEMO_ARM_MS + DEMO_GAP_MS;
     s_full_fb_ms = HAL_GetTick();
 
@@ -229,6 +251,19 @@ void App_Debug_StartDemoFromA(void)
     /* A 点回收已由 mission 启动，这里直接选表 1 继续演示 */
     s_full_flow = 1U;
     s_full_state = 5U;
+    s_full_c_only = 0U;
+    s_full_a_only = 0U;
+    s_full_t_ms = HAL_GetTick();
+    s_full_fb_ms = HAL_GetTick();
+}
+
+void App_Debug_StartDemoFromC(void)
+{
+    /* 仅跑 C：从通用展开开始，C 收起后结束，不接 D */
+    s_full_flow = 1U;
+    s_full_state = 20U;
+    s_full_c_only = 1U;
+    s_full_a_only = 0U;
     s_full_t_ms = HAL_GetTick();
     s_full_fb_ms = HAL_GetTick();
 }
@@ -256,10 +291,21 @@ void App_Debug_HandlePathEvents(void)
         {
             if (s_full_flow != 0U && ev.point_id == (uint8_t)'A')
             {
-                /* A 点：立即放行路径；不动 J1，只做闭爪 + 收起 */
                 (void)Chassis_Path_NotifyTaskDone((uint8_t)'A');
-                s_full_t_ms = HAL_GetTick();
-                s_full_state = 4U;
+
+                if (s_full_a_only != 0U)
+                {
+                    /* 纯路径到 A：停车即结束，不做闭爪/收起 */
+                    s_full_a_only = 0U;
+                    s_full_flow = 0U;
+                    s_full_state = 39U;
+                }
+                else
+                {
+                    /* A 点：不动 J1，只做闭爪 + 收起 */
+                    s_full_t_ms = HAL_GetTick();
+                    s_full_state = 4U;
+                }
             }
             else if (s_full_flow != 0U)
             {
@@ -515,11 +561,11 @@ void App_Debug_Update(void)
             }
             break;
 
-        case 22U: /* C 预存 */
+        case 22U: /* C 预存；动作完成后再停 2 s 才开激光 */
             if ((int32_t)(now - s_full_t_ms) >= 0)
             {
                 (void)Arm_Debug_MovePwm(s_pose_c, DEMO_ARM_MS);
-                s_full_t_ms = now + DEMO_ARM_MS;
+                s_full_t_ms = now + DEMO_ARM_MS + DEMO_GAP_MS;
                 s_full_state = 23U;
             }
             break;
@@ -569,12 +615,21 @@ void App_Debug_Update(void)
             }
             break;
 
-        case 28U: /* 前往 D */
+        case 28U: /* 前往 D；仅跑 C 时在此结束 */
             if ((int32_t)(now - s_full_t_ms) >= 0)
             {
-                (void)Chassis_Path_SelectById(3U);
-                (void)Chassis_Path_Start();
-                s_full_state = 29U;
+                if (s_full_c_only != 0U)
+                {
+                    s_full_flow = 0U;
+                    s_full_c_only = 0U;
+                    s_full_state = 39U;
+                }
+                else
+                {
+                    (void)Chassis_Path_SelectById(3U);
+                    (void)Chassis_Path_Start();
+                    s_full_state = 29U;
+                }
             }
             break;
 
@@ -821,6 +876,54 @@ void App_Debug_HandleKey(uint8_t key)
     else if (key == (uint8_t)'6')
     {
         Mission_RequestAbort();
+    }
+    else if (key == (uint8_t)'1')
+    {
+        /* 纯路径跑到 A：张爪 + 腕部平伸，到 A 停车结束 */
+        if (Mission_GetState() == MISSION_STATE_IDLE
+            && App_Debug_IsDemoActive() == 0U)
+        {
+            App_Debug_StartToA();
+        }
+    }
+    else if (key == (uint8_t)'2')
+    {
+        /* 调试：回读 J2/J3/J4，结果显示在 S14 第 4 行 */
+        Arm_Debug_ServoClearCache();
+        Arm_Debug_ServoRead();
+    }
+    else if (key == (uint8_t)'3')
+    {
+        /* 调试：释放/使能舵机扭矩切换 */
+        s_tq_on ^= 1U;
+        Arm_Debug_ServoTorqueBroadcast(s_tq_on);
+    }
+    else if (key == (uint8_t)'5')
+    {
+        /* C 两位姿切换：第一次到通用展开，第二次到 C 预存，循环 */
+        if (Mission_GetState() == MISSION_STATE_IDLE
+            && App_Debug_IsDemoActive() == 0U)
+        {
+            if (s_c_pose_sel == 0U)
+            {
+                (void)Arm_MovePwm(s_pose_common, DEMO_ARM_MS);
+                s_c_pose_sel = 1U;
+            }
+            else
+            {
+                (void)Arm_MovePwm(s_pose_c, DEMO_ARM_MS);
+                s_c_pose_sel = 0U;
+            }
+        }
+    }
+    else if (key == (uint8_t)'4')
+    {
+        /* 仅跑 C：从通用展开开始，验证新的 C 预存位，收起后结束 */
+        if (Mission_GetState() == MISSION_STATE_IDLE
+            && App_Debug_IsDemoActive() == 0U)
+        {
+            App_Debug_StartDemoFromC();
+        }
     }
     s_last_key = key;
     return;
@@ -2221,6 +2324,23 @@ static void debug_refresh_body(void)
     {
         p = dbg_stpcpy(p, "EN ");
         App_Dbg_FmtFloat(num, v.yaw_enc_deg, 1U);
+    }
+    else if (App_Debug_GetStep() == DEBUG_STEP_S14)
+    {
+        /* 正式/演示页：显示最近一次按键 2 回读的 J2/J3/J4 PWM */
+        Arm_Debug_View_t av;
+
+        Arm_Debug_GetView(&av);
+        p = dbg_stpcpy(p, "P");
+        App_Dbg_FmtInt(num, (int32_t)av.servo_pwm[0]);
+        p = dbg_stpcpy(p, num);
+        p = dbg_stpcpy(p, " ");
+        App_Dbg_FmtInt(num, (int32_t)av.servo_pwm[1]);
+        p = dbg_stpcpy(p, num);
+        p = dbg_stpcpy(p, " ");
+        App_Dbg_FmtInt(num, (int32_t)av.servo_pwm[2]);
+        p = dbg_stpcpy(p, num);
+        num[0] = '\0';
     }
     else
     {

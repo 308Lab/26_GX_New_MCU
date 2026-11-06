@@ -97,7 +97,7 @@ static const Path_Seg_t s_A_to_B_segs[] =
     SEG_ARC_L(90.0f, 200.0f, 200.0f), /* 左弧转入 B 区走廊 */
     SPIN_ALIGN(),
 
-    SEG_FWD(110.0f, 200.0f),          /* 第一段短直行 */
+    SEG_FWD(70.0f, 200.0f),          /* 第一段短直行 */
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 右弧 */
     SPIN_ALIGN(),
 
@@ -105,11 +105,11 @@ static const Path_Seg_t s_A_to_B_segs[] =
     SEG_ARC_L(90.0f, 200.0f, 200.0f), /* 左弧 */
     SPIN_ALIGN(),
 
-    SEG_FWD(260.0f, 200.0f),          /* 中段直行 */
+    SEG_FWD(250.0f, 200.0f),          /* 中段直行 */
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 右弧 */
     SPIN_ALIGN(),
 
-    SEG_FWD(350.0f, 200.0f),          /* 接近任务区 */
+    SEG_FWD(340.0f, 200.0f),          /* 接近任务区 */
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 最后一个右弧，摆正朝向 */
     SPIN_ALIGN(),
 
@@ -173,7 +173,7 @@ static const Path_Table_t s_path_D_to_end =
     PATH_TABLE_ENTRY("D_end", s_D_to_end_segs);
 
 /* ⚠ 顺序即表号：mission.c 的 SelectById(0..4) 依赖这个顺序，只能往末尾追加 */
-const Path_Table_t *const g_chassis_path_table[] =
+ const Path_Table_t *const g_chassis_path_table[] =
 {
     &s_path_start_to_A,
     &s_path_A_to_B,

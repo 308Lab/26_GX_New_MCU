@@ -88,7 +88,9 @@ void App_Debug_HandlePathEvents(void);
 
 /* 演示流程（无视觉）公共入口。正式模式扫码失败或模拟按键时接管。 */
 void    App_Debug_StartDemo(void);        /* 从起点开始完整演示 */
+void    App_Debug_StartToA(void);         /* 纯路径：起点→A，停车后结束 */
 void    App_Debug_StartDemoFromA(void);   /* A 点扫码失败：J1 已右转，从回正继续 */
+void    App_Debug_StartDemoFromC(void);   /* 仅跑 C：从通用展开开始，跑完收起即停 */
 void    App_Debug_StopDemo(void);
 uint8_t App_Debug_IsDemoActive(void);
 
