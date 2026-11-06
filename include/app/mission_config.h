@@ -19,11 +19,12 @@
 #define MISSION_LASER_MS             (3000U)   /* 激光最长 3 s */
 
 /* ===================== 2. 视觉事务超时 ===================== */
-#define MISSION_A_SCAN_SETTLE_MS     (500U)    /* 到 A 点后先停稳，再发 0x10 */
+#define MISSION_A_SCAN_SETTLE_MS     (2000U)   /* 到 A 点后停稳 2 s，再发 0x10 */
 #define MISSION_SCAN_CODE_TIMEOUT_MS (3000U)   /* 0x10 发出后 3 s 无响应判失败 */
 #define MISSION_SCAN_ORDER_MS        (4000U)   /* 扫描段 + 3 s 顺序兜底 */
 #define MISSION_ORDER_WAIT_MS        (3500U)   /* 停车后等视觉名次，含 3 s 兜底 */
 #define MISSION_RANK_DIST_MM         (150)     /* 任务物品相对区域中间的前后距离 */
+#define MISSION_C_LASER_BACK_MM      (30)      /* C 开激光前后退，补偿激光与相机的安装位移 */
 #define MISSION_MIDLINE_SPEED_MMPS   (50.0f)   /* 中位线对准的低速连续移动速度 */
 /* v1.6：中位线回的是千分比偏移量，|offset| 小于死区即判「已对准」。
    50‰ = 5% 画宽，与上位机 v1.5.1 时代的三态判据（±5% 视为居中）同源，
@@ -60,16 +61,17 @@
    审计 H2/H3 之后这些 PWM 要过 Arm_MovePwm 的软限位闸门：
    J4 868→920（原值 q4≈−93.3°，越过机械端点 897）；
    J3 2114/2127→2113（原值 q3=178.03°/180.0°，越过软限位 178°）。
-   换算：q3=(PWM−937)/(595/90)，q4=(PWM−1559)/(2000/270)。 */
-#define MISSION_POSE_A_SCAN          { 1976U, 2113U, 1829U }  /* A 扫码：小臂用初始值 */
-#define MISSION_POSE_COMMON_OPEN     { 1960U, 1502U,  920U }
-#define MISSION_POSE_B_PRESET        { 1595U, 1504U, 1055U }
-#define MISSION_POSE_B_DEMO          { 1443U, 1642U, 1214U }  /* 追踪二次失败后的演示取球位 */
-#define MISSION_POSE_B_BUCKET        { 1959U, 1642U, 1004U }
-#define MISSION_POSE_B_BUCKET_DEMO   { 1756U, 1677U,  994U }  /* 追踪二次失败后的演示放桶位 */
-#define MISSION_POSE_C_PRESET        { 1952U, 2027U, 1655U }  /* 2026-11-06 重标，腕部回调 −70 */
-#define MISSION_POSE_D_PRESET        { 1842U, 1642U, 1175U }
-#define MISSION_POSE_STOW            { 2206U, 2113U, 2137U }
+   换算（2026-11-07 新 J3）：q3=(PWM−839)/(636/90)，q4=(PWM−1559)/(2000/270)。 */
+#define MISSION_POSE_A_SCAN          { 1976U, 2096U, 1829U }  /* A 扫码：小臂用初始值 */
+#define MISSION_POSE_COMMON_OPEN     { 1930U, 1473U,  870U }  /* 展开高度下调，腕部再降 */
+#define MISSION_POSE_B_PRESET        { 1595U, 1445U, 1055U }
+#define MISSION_POSE_B_DEMO          { 1443U, 1592U, 1214U }  /* 抓取复核失败的演示取球位 */
+#define MISSION_POSE_B_BUCKET        { 1959U, 1592U, 1004U }
+#define MISSION_POSE_B_BUCKET_DEMO   { 1756U, 1630U,  994U }  /* 抓取复核失败的演示放桶位 */
+#define MISSION_POSE_C_PRESET        { 1952U, 2004U, 1655U }  /* 2026-11-07 按新 J3 重算 */
+#define MISSION_POSE_D_PRESET        { 1842U, 1592U, 1175U }
+#define MISSION_POSE_D_DEMO          { 1619U, 1431U, 1153U }  /* D 演示取人质位 */
+#define MISSION_POSE_STOW            { 2206U, 2096U, 2137U }
 
 /* A 扫码姿态关节角（J2/J3/J4，J1 另给） */
 #define MISSION_A_ARM_Q2_DEG         (150.44f)

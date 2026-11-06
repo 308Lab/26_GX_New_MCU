@@ -63,6 +63,10 @@ typedef struct
 
 /* ===================== 静态状态 ===================== */
 
+/* v1.6 §5.1：最近一次扫码成功的三位原文 d1/d2/d3 */
+static uint8_t s_scan_code[3];
+static uint8_t s_scan_code_valid;
+
 /* ISR 与任务共享的解析状态；任务侧复位时进入短临界区 */
 static volatile uint8_t  s_parser_state;
 static volatile uint8_t  s_parser_synced;
@@ -697,7 +701,12 @@ static void vision_rx_drain(void)
             if (s_pending.kind == VISION_PEND_SCAN)
             {
                 /* v1.6 §5.1：data[0] = ok（1 扫到合法码）；d1..d3 是三位原文，
-                   MCU 不解释，只把 ok 位带进事件方便调试台复盘。 */
+                   保存供业务层读取，事件 value 仍只带 ok 位。 */
+                s_scan_code[0] = msg.data[1];
+                s_scan_code[1] = msg.data[2];
+                s_scan_code[2] = msg.data[3];
+                s_scan_code_valid = 1U;
+
                 vision_emit(VISION_EV_SCAN_OK, VISION_ZONE_NONE, msg.cmd,
                             msg.data[0], VISION_REASON_NONE, 0U);
                 vision_pending_clear();
@@ -1027,6 +1036,8 @@ int Vision_Link_RequestScanCode(void)
         return ret;
     }
 
+    s_scan_code_valid = 0U;   /* 新一轮扫码，旧三位作废 */
+
     s_pending.kind = VISION_PEND_SCAN;
     s_pending.zone = VISION_ZONE_NONE;
     s_pending.tx_cmd = VISION_CMD_SCAN_CODE_REQ;
@@ -1036,6 +1047,23 @@ int Vision_Link_RequestScanCode(void)
     s_pending.deadline_ms = now + VISION_LINK_SCAN_RESPONSE_TIMEOUT_MS;
 
     return VISION_LINK_OK;
+}
+
+uint8_t Vision_Link_GetScanCode(uint8_t code[3])
+{
+    uint8_t i;
+
+    if ((code == NULL) || (s_scan_code_valid == 0U))
+    {
+        return 0U;
+    }
+
+    for (i = 0U; i < 3U; i++)
+    {
+        code[i] = s_scan_code[i];
+    }
+
+    return 1U;
 }
 
 int Vision_Link_StartScan(Vision_Zone_e zone)

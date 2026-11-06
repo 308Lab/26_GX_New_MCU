@@ -32,4 +32,11 @@ void Oled_DrawStr(uint8_t x, uint8_t page, const char *s);
 /* 整行显示，先补空格清到行尾 */
 void Oled_DrawStrLine(uint8_t page, const char *s);
 
+/* 全屏居中显示大圆圈 / 大叉，并立即刷新 */
+void Oled_DrawBigCircle(void);
+void Oled_DrawBigCross(void);
+
+/* 全屏居中显示一个大数字（0~9） */
+void Oled_DrawBigDigit(uint8_t digit);
+
 #endif /* COMMON_OLED_H */

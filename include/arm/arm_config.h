@@ -46,14 +46,14 @@
 /* J2 于 2026-11-01 两点实测：向前伸直 PWM 846（q2=0），竖直向上 PWM 1522（q2=90），
    收起后仰 q2=181 → PWM 约 2205。斜率 = (1522-846)/90 = 7.5111 PWM/°；DIR=+1。 */
 #define ARM_SERVO_J2_ZERO_PWM       (846.0f)
-#define ARM_SERVO_J3_ZERO_PWM       (937.0f)   /* 2026-11-03 新 J3：90°=1532, 180°=2127 */
+#define ARM_SERVO_J3_ZERO_PWM       (839.0f)   /* 2026-11-07 新 J3：0°=839, 90°=1475, 启动位 2098 */
 #define ARM_SERVO_J4_ZERO_PWM       (1559.0f)
 #define ARM_SERVO_J2_DIR            (+1.0f)
-#define ARM_SERVO_J3_DIR            (+1.0f)
+#define ARM_SERVO_J3_DIR            (+1.0f)   /* 新 J3：角度增大 PWM 增大（同旧舵机） */
 #define ARM_SERVO_J4_DIR            (+1.0f)
 
 #define ARM_SERVO_J2_PWM_PER_DEG    (676.0f / 90.0f)
-#define ARM_SERVO_J3_PWM_PER_DEG    (595.0f / 90.0f)
+#define ARM_SERVO_J3_PWM_PER_DEG    (636.0f / 90.0f)  /* 1475-839 / 90 */
 #define ARM_SERVO_J4_PWM_PER_DEG    (2000.0f / ARM_SERVO_DEG_RANGE)
 
 #define ARM_SERVO_TIMEOUT_MS        (50U)     /* PRAD / ID 应答超时 */
@@ -76,7 +76,7 @@
    若夹爪舵机实际为 180°，需按 500 + 角度/180 × 2000 重算。 */
 #define ARM_GRIPPER_OPEN_US         (833U)
 #define ARM_GRIPPER_CLOSE_US        (1500U)
-#define ARM_GRIPPER_GRASP_US        (1278U)
+#define ARM_GRIPPER_GRASP_US        (1278U)  /* 105°（45°=833、135°=1500 线性换算） */
 #define ARM_GRIPPER_MOVE_MS         (800U)
 
 /* ===================== 4. 激光（GPIO） =====================
@@ -121,8 +121,8 @@
    伸直 0° → PWM 895；收起 160° → PWM ≈2156。软限位直接取机械两端。 */
 #define ARM_Q3_MIN_DEG              (   0.0f)
 #define ARM_Q3_MAX_DEG              ( 178.0f)  /* 新 J3 机械上限 180°（PWM 2127），留 2° 余量 */
-#define ARM_Q4_MIN_DEG              ( -89.0f)
-#define ARM_Q4_MAX_DEG              (  79.0f)
+#define ARM_Q4_MIN_DEG              (-180.0f)  /* 2026-11-07 取消腕部软限 */
+#define ARM_Q4_MAX_DEG              ( 180.0f)
 
 /* 工作空间（以 J1 旋转中心为原点的水平半径 r / 高度 z）
    2026-10-30 临时放宽：为测试 (0,0,400) 竖直伸展位姿，
@@ -221,13 +221,13 @@
    数组顺序：ID1 / J2，ID2 / J3，ID3 / J4。2026-11-01 实测。
    演示模式 = 无视觉上位机。 */
 /* 审计 H3：J4=868 → q4≈−93.3°，越过机械端点 897（−89.4°）。改 920 → q4≈−86.3°。 */
-#define ARM_POSE_COMMON_OPEN_PWM    { 1960U, 1502U,  920U }  /* 通用左展开 */
-#define ARM_POSE_B_PRESET_PWM       { 1595U, 1504U, 1055U }  /* B 机械臂预存 */
-#define ARM_POSE_B_DEMO_PWM         { 1443U, 1642U, 1214U }  /* B 演示机械臂（取球） */
-#define ARM_POSE_B_BUCKET_DEMO_PWM  { 1756U, 1677U,  994U }  /* B 演示放置桶 */
-#define ARM_POSE_B_BUCKET_PRESET_PWM { 1959U, 1642U, 1004U } /* B 放置桶机械臂预存（正式） */
-#define ARM_POSE_C_PRESET_PWM       { 1952U, 2027U, 1655U }  /* C 预存：2026-11-06 重标，腕部回调 −70 */
-#define ARM_POSE_D_PRESET_PWM       { 1842U, 1642U, 1175U }  /* D 机械臂预存 */
-#define ARM_POSE_D_DEMO_PWM         { 1619U, 1573U, 1153U }  /* D 演示机械臂 */
+#define ARM_POSE_COMMON_OPEN_PWM    { 1930U, 1473U,  870U }  /* 通用左展开（高度下调，腕部再降） */
+#define ARM_POSE_B_PRESET_PWM       { 1595U, 1445U, 1055U }  /* B 机械臂预存 */
+#define ARM_POSE_B_DEMO_PWM         { 1443U, 1592U, 1214U }  /* B 演示机械臂（取球） */
+#define ARM_POSE_B_BUCKET_DEMO_PWM  { 1756U, 1630U,  994U }  /* B 演示放置桶 */
+#define ARM_POSE_B_BUCKET_PRESET_PWM { 1959U, 1592U, 1004U } /* B 放置桶机械臂预存（正式） */
+#define ARM_POSE_C_PRESET_PWM       { 1952U, 2004U, 1655U }  /* C 预存 */
+#define ARM_POSE_D_PRESET_PWM       { 1842U, 1592U, 1175U }  /* D 机械臂预存 */
+#define ARM_POSE_D_DEMO_PWM         { 1619U, 1519U, 1153U }  /* D 演示机械臂 */
 
 #endif /* ARM_ARM_CONFIG_H */

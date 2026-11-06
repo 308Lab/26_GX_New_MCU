@@ -98,18 +98,18 @@ static const Path_Seg_t s_A_to_B_segs[] =
     SPIN_ALIGN(),
 
     SEG_FWD(70.0f, 200.0f),          /* 第一段短直行 */
-    SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 右弧 */
+    SEG_ARC_R(90.0f, 200.0f, 150.0f), /* 右弧 */
     SPIN_ALIGN(),
 
-    SEG_FWD(360.0f, 150.0f),          /* 过减速带，降到 150 */
+    SEG_FWD(350.0f, 150.0f),          /* 过减速带，降到 150 */
     SEG_ARC_L(90.0f, 200.0f, 200.0f), /* 左弧 */
     SPIN_ALIGN(),
 
-    SEG_FWD(250.0f, 200.0f),          /* 中段直行 */
+    SEG_FWD(240.0f, 200.0f),          /* 中段直行 */
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 右弧 */
     SPIN_ALIGN(),
 
-    SEG_FWD(340.0f, 200.0f),          /* 接近任务区 */
+    SEG_FWD(280.0f, 200.0f),          /* 接近任务区 */
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 最后一个右弧，摆正朝向 */
     SPIN_ALIGN(),
 
@@ -138,7 +138,7 @@ static const Path_Seg_t s_B_to_C_segs[] =
    ══════════════════════════════════════════════════════════════════════════ */
 static const Path_Seg_t s_C_to_D_segs[] =
 {
-    SEG_FWD(305.0f, 200.0f),
+    SEG_FWD(335.0f, 200.0f),
     SEG_ARC_R(90.0f, 200.0f, 200.0f), /* 右转进 D 区走廊 */
     SPIN_ALIGN(),
     SEG_FWD(320.0f, 200.0f),

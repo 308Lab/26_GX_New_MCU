@@ -29,6 +29,7 @@ static uint32_t s_state_ms;
 static uint8_t  s_rank;
 static uint8_t  s_arrive_id;
 static uint8_t  s_scan_result;   /* 0=等待 1=成功 2=错误 3=超时 */
+static uint8_t  s_task_code[3];  /* A 扫码三位原文 d1/d2/d3 */
 static uint8_t  s_order_ready;
 static uint8_t  s_rank_moving;
 static uint8_t  s_midline_got;
@@ -38,6 +39,7 @@ static int8_t   s_midline_dir;      /* -1=后退 0=停 +1=前进 */
 static uint8_t  s_midline_no_resp;
 static uint8_t  s_midline_probe;      /* 1 = 本轮未检出时允许慢速前进探格（首次对准） */
 static uint8_t  s_midline_probe_cnt;  /* 已探步数 */
+static uint8_t  s_midline_sel;        /* v1.6：本轮中位线的 sel 选择字段 */
 static uint32_t s_midline_start_ms;
 static uint32_t s_midline_next_ms;
 static uint32_t s_midline_rx_count;
@@ -58,12 +60,11 @@ static uint8_t  s_stop_after_a;
 
 static const uint16_t POSE_A_SCAN[3] __attribute__((unused)) = MISSION_POSE_A_SCAN;
 static const uint16_t POSE_COMMON[3] = MISSION_POSE_COMMON_OPEN;
-static const uint16_t POSE_B[3]      = MISSION_POSE_B_PRESET;
 static const uint16_t POSE_B_DEMO[3] = MISSION_POSE_B_DEMO;
 static const uint16_t POSE_B_BUCKET[3] = MISSION_POSE_B_BUCKET;
 static const uint16_t POSE_B_BUCKET_DEMO[3] = MISSION_POSE_B_BUCKET_DEMO;
 static const uint16_t POSE_C[3]      = MISSION_POSE_C_PRESET;
-static const uint16_t POSE_D[3]      = MISSION_POSE_D_PRESET;
+static const uint16_t POSE_D_DEMO[3] = MISSION_POSE_D_DEMO;
 static const uint16_t POSE_STOW[3]   = MISSION_POSE_STOW;
 
 /* A 扫码姿态关节角：PTP 备用，当前应急模式用 PWM 直发 */
@@ -119,6 +120,9 @@ static void mission_hard_stop(void)
 /* A 点失败：只到 A 模式直接结束，否则进入降级跑图 */
 static void mission_a_fail(void)
 {
+    /* 扫码失败：全屏大叉 3 s */
+    App_Debug_ShowScanResult(0U, 3000U);
+
     /* 扫码等待已结束：启动回收，不等待完成 */
     (void)Arm_Close();
     (void)Arm_MovePwm(POSE_STOW, MISSION_ARM_MS);
@@ -216,6 +220,12 @@ static void mission_pump(void)
             s_order_ready = 1U;
             /* 兼容仍带扫描段的路径表；当前表已改为停车后按距离移动 */
             Chassis_Path_SetRank(s_rank);
+
+            /* 真实名次才弹大数字；3 s 兜底值（flags bit0）不显示 */
+            if ((ve.flags & 0x01U) == 0U)
+            {
+                App_Debug_ShowRank(s_rank);
+            }
             break;
 
         case VISION_EV_TARGET_LOST:
@@ -387,7 +397,17 @@ static void mission_midline_drive(int8_t dir)
     }
 }
 
-static void mission_midline_start(Vision_Zone_e zone, uint32_t now, uint8_t allow_probe)
+/* A 扫码三位按顺序对应 B/C/D 任务编号，作为第二次中位线的 sel。
+   非法值回退为 0（不指定），避免把越界 sel 发给视觉。 */
+static uint8_t mission_task_sel(uint8_t idx)
+{
+    uint8_t v = (idx < 3U) ? s_task_code[idx] : 0U;
+
+    return ((v >= 1U) && (v <= 3U)) ? v : 0U;
+}
+
+static void mission_midline_start(Vision_Zone_e zone, uint32_t now,
+                                  uint8_t allow_probe, uint8_t sel)
 {
     s_midline_got = 0U;
     s_midline_result = VISION_LINK_MIDLINE_UNDETECTED;
@@ -396,12 +416,13 @@ static void mission_midline_start(Vision_Zone_e zone, uint32_t now, uint8_t allo
     s_midline_no_resp = 0U;
     s_midline_probe = allow_probe;
     s_midline_probe_cnt = 0U;
+    s_midline_sel = sel;
     s_midline_rx_count = 0U;
     s_midline_rx_seen = 0U;
     s_midline_start_ms = now;
     s_midline_next_ms = now + MISSION_MIDLINE_PERIOD_MS;
 
-    (void)Vision_Link_RequestMidline(zone, 0U);
+    (void)Vision_Link_RequestMidline(zone, sel);
 }
 
 /* 返回 0=仍在对准，1=已对准或放弃 */
@@ -467,7 +488,7 @@ static int mission_midline_step(Vision_Zone_e zone, uint32_t now)
         }
 
         (void)Vision_Link_CancelMidline();
-        (void)Vision_Link_RequestMidline(zone, 0U);
+        (void)Vision_Link_RequestMidline(zone, s_midline_sel);
         s_midline_next_ms = now + MISSION_MIDLINE_PERIOD_MS;
     }
 
@@ -531,7 +552,9 @@ static void mission_run_a(uint32_t now)
 
         if (s_scan_result == 1U)
         {
-            /* 扫到码：启动回收，同时放行 A 点并发车前往 B */
+            /* 扫到码：保存三位任务号码，全屏大圆圈 3 s，同时启动回收并放行 A 点 */
+            (void)Vision_Link_GetScanCode(s_task_code);
+            App_Debug_ShowScanResult(1U, 3000U);
             (void)Arm_Close();
             (void)Arm_MovePwm(POSE_STOW, MISSION_ARM_MS);
             (void)Chassis_Path_NotifyTaskDone((uint8_t)'A');
@@ -579,9 +602,9 @@ static void mission_run_b(uint32_t now)
 
     case 2U:
         if ((int32_t)(now - s_t_ms) < 0) break;
-        /* 展开到位后开始扫描并做首次中位线对准 */
+        /* 完全展开（三轴 + J1 步进）完成后，先做首次中位线 */
         (void)Vision_Link_StartScan(VISION_ZONE_B);
-        mission_midline_start(VISION_ZONE_B, now, 1U);
+        mission_midline_start(VISION_ZONE_B, now, 1U, 0U);   /* 首次：不指定，校准车体 */
         s_sub = 32U;
         break;
 
@@ -590,7 +613,7 @@ static void mission_run_b(uint32_t now)
         /* 首次对准建立新的纵向基准，此前的移动不计入到桶补偿 */
         s_align_mm = 0;
         s_align_accum = 0U;
-        mission_request_order(VISION_ZONE_B, now);
+        mission_request_order(VISION_ZONE_B, now);   /* 中位线完成后再请求名次 */
         s_sub = 30U;
         break;
 
@@ -599,41 +622,27 @@ static void mission_run_b(uint32_t now)
         s_sub = 31U;
         break;
 
-    case 31U: /* 按名次前后移动到目标球 */
+    case 31U: /* 名次到位后，请求对应目标的中位线校准 */
         if (mission_rank_move_step() == 0) break;
-        mission_midline_start(VISION_ZONE_B, now, 0U);   /* 到位后重新定位 */
+        mission_midline_start(VISION_ZONE_B, now, 0U, mission_task_sel(0U));  /* B = 扫码第 1 位 */
         s_sub = 34U;
         break;
 
     case 34U: /* 名次到位后的中位线复核（v1.6：追踪帧废止，这是对臂/打靶前最后一次横向对准） */
         if (mission_midline_step(VISION_ZONE_B, now) == 0) break;
-        (void)Arm_MovePwm(POSE_B, MISSION_ARM_MS);
+        (void)Arm_MovePwm(POSE_B_DEMO, MISSION_ARM_MS);   /* 直接到演示取球位 */
         s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 5U;
+        s_sub = 51U;
         break;
 
-    case 5U:  /* 下降抓取 */
-        if (Arm_IsBusy() != 0U) break;
-        (void)Arm_ApproachTool(30, 2000U);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 6U;
-        break;
-
-    case 6U:
+    case 51U: /* 演示取球位到位后直接夹取 */
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_Grasp();
         s_t_ms = now + MISSION_GRIP_MS;
-        s_sub = 7U;
+        s_sub = 52U;
         break;
 
-    case 7U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_ApproachTool(-30, 2000U);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 8U;
-        break;
-
-    case 8U:
+    case 52U: /* 夹取后回展开，进入抓取复核 */
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
@@ -661,10 +670,11 @@ static void mission_run_b(uint32_t now)
         if (s_order_ready == 0U && (int32_t)(now - s_t_ms) < 0) break;
         if (s_order_got != 0U)
         {
-            /* 目标仍在画面：这一夹没夹到，改走演示取球/放桶动作 */
+            /* 目标仍在画面：第一次没夹到。先松爪，再走演示取球位重夹 */
             s_b_demo = 1U;
+            (void)Arm_Release();
             (void)Arm_MovePwm(POSE_B_DEMO, MISSION_ARM_MS);
-            s_t_ms = now + MISSION_ARM_MS;
+            s_t_ms = now + MISSION_GRIP_MS + MISSION_ARM_MS;
             s_sub = 23U;
         }
         else
@@ -736,31 +746,24 @@ static void mission_run_b(uint32_t now)
         s_sub = 20U;
         break;
 
-    case 13U:
+    case 13U: /* 桶预存位：仅观察，不放桶 */
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_MovePwm(POSE_B_BUCKET, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS;
         s_sub = 14U;
         break;
 
-    case 16U:
-        if (Arm_IsBusy() != 0U) break;
-        (void)Arm_ApproachTool(20, 2000U);
+    case 14U: /* 观察后到演示放桶位，实际在此释放 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_B_BUCKET_DEMO, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 17U;
+        s_sub = 15U;
         break;
 
-    case 17U:
+    case 15U:
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_Release();
         s_t_ms = now + MISSION_GRIP_MS;
-        s_sub = 18U;
-        break;
-
-    case 18U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_ApproachTool(-20, 2000U);
-        s_t_ms = now + MISSION_ARM_MS;
         s_sub = 19U;
         break;
 
@@ -801,28 +804,13 @@ static void mission_run_c(uint32_t now)
 {
     switch (s_sub)
     {
-    case 0U:
-        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
-        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
-        s_sub = 1U;
-        break;
-
-    case 1U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_MoveBaseRelative(90.0f);
-        s_t_ms = now + MISSION_J1_90_MS + MISSION_GAP_MS;
-        s_sub = 2U;
-        break;
-
-    case 2U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        /* 展开到位后开始扫描并做首次中位线对准 */
+    case 0U: /* 到点后先扫描 + 中位线第一次，暂不展开机械臂 */
         (void)Vision_Link_StartScan(VISION_ZONE_C);
-        mission_midline_start(VISION_ZONE_C, now, 1U);
+        mission_midline_start(VISION_ZONE_C, now, 1U, 0U);   /* 首次：不指定，校准车体 */
         s_sub = 32U;
         break;
 
-    case 32U: /* 首次中位线对准 */
+    case 32U: /* 第一次中位线完成 → 请求名次 */
         if (mission_midline_step(VISION_ZONE_C, now) == 0) break;
         mission_request_order(VISION_ZONE_C, now);
         s_sub = 30U;
@@ -833,19 +821,49 @@ static void mission_run_c(uint32_t now)
         s_sub = 31U;
         break;
 
-    case 31U: /* 按名次前后移动到目标靶 */
+    case 31U: /* rank 移动完成后，才开始展开机械臂 */
         if (mission_rank_move_step() == 0) break;
-        mission_midline_start(VISION_ZONE_C, now, 0U);   /* 到位后重新定位 */
+        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
+        s_sub = 1U;
+        break;
+
+    case 1U: /* 展开到位 → J1 左转 90° */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MoveBaseRelative(90.0f);
+        s_t_ms = now + MISSION_J1_90_MS + MISSION_GAP_MS;
+        s_sub = 2U;
+        break;
+
+    case 2U: /* 转向完成 → 机械臂到 C 预存位 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_C, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS;
+        s_sub = 60U;
+        break;
+
+    case 60U: /* 预存位到位 → 中位判定（对应靶任务编号） */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        mission_midline_start(VISION_ZONE_C, now, 0U, mission_task_sel(1U));
         s_sub = 34U;
         break;
 
-    case 34U: /* 名次到位后的中位线复核（v1.6：追踪帧废止，这是对臂/打靶前最后一次横向对准） */
+    case 34U: /* 中位判定完成 → 后退补偿激光/相机位移 */
         if (mission_midline_step(VISION_ZONE_C, now) == 0) break;
-        (void)Arm_MovePwm(POSE_C, MISSION_ARM_MS);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 5U;
+        if (Chassis_Path_ServoStep(-(int16_t)MISSION_C_LASER_BACK_MM, 0) == 0)
+        {
+            s_servo_busy = 1U;
+            s_t_ms = now;
+            s_sub = 36U;
+        }
         break;
 
+    case 36U: /* 后退完成 → 停 2 s → 激光 */
+        if (s_servo_busy != 0U) break;
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        s_t_ms = now + MISSION_GAP_MS;
+        s_sub = 5U;
+        break;
 
     case 5U:
         if ((int32_t)(now - s_t_ms) < 0)
@@ -920,7 +938,7 @@ static void mission_run_d(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         /* 展开到位后开始扫描并做首次中位线对准 */
         (void)Vision_Link_StartScan(VISION_ZONE_D);
-        mission_midline_start(VISION_ZONE_D, now, 1U);
+        mission_midline_start(VISION_ZONE_D, now, 1U, 0U);   /* 首次：不指定，校准车体 */
         s_sub = 32U;
         break;
 
@@ -935,41 +953,27 @@ static void mission_run_d(uint32_t now)
         s_sub = 31U;
         break;
 
-    case 31U: /* 按名次前后移动到目标 */
+    case 31U: /* 名次到位后，请求对应目标的中位线校准 */
         if (mission_rank_move_step() == 0) break;
-        mission_midline_start(VISION_ZONE_D, now, 0U);   /* 到位后重新定位 */
+        mission_midline_start(VISION_ZONE_D, now, 0U, mission_task_sel(2U));  /* D = 扫码第 3 位 */
         s_sub = 34U;
         break;
 
     case 34U: /* 名次到位后的中位线复核（v1.6：追踪帧废止，这是对臂/打靶前最后一次横向对准） */
         if (mission_midline_step(VISION_ZONE_D, now) == 0) break;
-        (void)Arm_MovePwm(POSE_D, MISSION_ARM_MS);
+        (void)Arm_MovePwm(POSE_D_DEMO, MISSION_ARM_MS);   /* 直接到演示取人质位 */
         s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 5U;
+        s_sub = 51U;
         break;
 
-    case 5U:
-        if (Arm_IsBusy() != 0U) break;
-        (void)Arm_ApproachTool(30, 2000U);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 6U;
-        break;
-
-    case 6U:
+    case 51U: /* 演示位到位后直接夹取 */
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_Grasp();
         s_t_ms = now + MISSION_GRIP_MS;
-        s_sub = 7U;
+        s_sub = 52U;
         break;
 
-    case 7U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_ApproachTool(-30, 2000U);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 8U;
-        break;
-
-    case 8U:
+    case 52U: /* 夹取后回展开，进入 J1 回正/收起 */
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;

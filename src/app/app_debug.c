@@ -173,7 +173,7 @@ static uint32_t s_chain_next_ms;
 static const float s_a_scan_q[4] = { 0.0f, 150.44f, 164.28f, 36.45f };
 /* 应急模式：A 扫码姿态 PWM（J2/J3/J4），直接下发、不等回读 */
 /* H2 之后 2127（q3=180°）会越限，同步收到 2113；本表当前未被调用 */
-static const uint16_t s_a_scan_pwm[3] __attribute__((unused)) = { 1976U, 2113U, 1829U };
+static const uint16_t s_a_scan_pwm[3] __attribute__((unused)) = { 1976U, 2096U, 1829U };
 static uint8_t  s_a_arm_flow;      /* 1 = 流程激活 */
 static uint8_t  s_a_arm_state;     /* 3=等夹爪张开，0=等路径DONE，1=等J1转向，2=已完成 */
 static uint32_t s_a_gripper_ms;
@@ -189,8 +189,18 @@ static uint8_t  s_full_flow;
 static uint8_t  s_full_state;
 static uint8_t  s_full_c_only;      /* 1 = 只跑 C，收起后结束 */
 static uint8_t  s_full_a_only;      /* 1 = 只跑到 A，停车后结束 */
-static uint8_t  s_c_pose_sel;       /* 0 = 下次按键到 C 展开，1 = 到 C 预存 */
+static uint8_t  s_c_pose_sel __attribute__((unused));  /* 0 = 下次按键到 C 展开，1 = 到 C 预存 */
+
+/* 仅跑图：0→1→2→3→4，任务点停 1 s 代替机械臂动作 */
+static uint8_t  s_map_active;
+static uint8_t  s_map_table;
+static uint8_t  s_map_waiting;
+static uint8_t  s_map_point;
+static uint32_t s_map_wait_ms;
 static uint32_t s_full_t_ms;
+static uint32_t s_big_until;
+static uint8_t  s_big_result;       /* 1 = 圆圈，2 = 叉，3 = 名次数字 */
+static uint8_t  s_big_digit;
 static uint32_t s_full_fb_ms;
 static uint8_t  s_demo_read_id = 1U;
 
@@ -204,7 +214,7 @@ static const uint16_t s_pose_c[3] DEMO_POSE_UNUSED        = ARM_POSE_C_PRESET_PW
 static const uint16_t s_pose_d[3] DEMO_POSE_UNUSED        = ARM_POSE_D_DEMO_PWM;
 /* 收起姿态 PWM：q2=181.06°, q3=177.88°, q4=78.03°（新 J3 标定）。
    J3 由 2114 收到 2113：审计 H2 加了限位闸门后 2114（q3=178.03°）会越限被拒。 */
-static const uint16_t s_pose_stow[3]     = { 2206U, 2113U, 2137U };
+static const uint16_t s_pose_stow[3]     = { 2206U, 2096U, 2137U };
 
 #define DEMO_ARM_MS        (3000U)  /* 机械臂每个 PWM 动作 3 s */
 #define DEMO_GAP_MS        (2000U)  /* 机械臂与步进之间的间隔 2 s */
@@ -246,6 +256,19 @@ void App_Debug_StartToA(void)
     (void)Chassis_Path_Start();
 }
 
+void App_Debug_StartMapRun(void)
+{
+    /* 仅跑图：依次 0→1→2→3→4，任务点停 1 s 代替机械臂动作 */
+    s_map_active = 1U;
+    s_map_table = 0U;
+    s_map_waiting = 0U;
+    s_map_point = 0U;
+    s_map_wait_ms = 0U;
+
+    (void)Chassis_Path_SelectById(0U);
+    (void)Chassis_Path_Start();
+}
+
 void App_Debug_StartDemoFromA(void)
 {
     /* A 点回收已由 mission 启动，这里直接选表 1 继续演示 */
@@ -272,11 +295,36 @@ void App_Debug_StopDemo(void)
 {
     s_full_flow = 0U;
     s_full_state = 39U;
+    s_map_active = 0U;
 }
 
 uint8_t App_Debug_IsDemoActive(void)
 {
-    return s_full_flow;
+    return ((s_full_flow != 0U) || (s_map_active != 0U)) ? 1U : 0U;
+}
+
+void App_Debug_ShowScanResult(uint8_t ok, uint32_t ms)
+{
+    s_big_result = (ok != 0U) ? 1U : 2U;
+    s_big_until = HAL_GetTick() + ms;
+
+    if (s_big_result == 1U)
+    {
+        Oled_DrawBigCircle();
+    }
+    else
+    {
+        Oled_DrawBigCross();
+    }
+}
+
+void App_Debug_ShowRank(uint8_t rank)
+{
+    s_big_result = 3U;
+    s_big_digit = (rank <= 2U) ? rank : 1U;
+    s_big_until = HAL_GetTick() + 3000U;
+
+    Oled_DrawBigDigit(s_big_digit);
 }
 
 void App_Debug_HandlePathEvents(void)
@@ -286,6 +334,35 @@ void App_Debug_HandlePathEvents(void)
     while (Chassis_Path_TakeEvent(&ev))
     {
         s_last_path_ev = ev.type;
+
+        if (s_map_active != 0U)
+        {
+            if (ev.type == PATH_EV_ARRIVE_POINT)
+            {
+                /* 任务点：停 1 s 代替机械臂动作，然后放行路径 */
+                s_map_point = ev.point_id;
+                s_map_waiting = 1U;
+                s_map_wait_ms = HAL_GetTick() + 1000U;
+            }
+            else if (ev.type == PATH_EV_DONE)
+            {
+                s_map_table++;
+                if (s_map_table < 5U)
+                {
+                    (void)Chassis_Path_SelectById(s_map_table);
+                    (void)Chassis_Path_Start();
+                }
+                else
+                {
+                    s_map_active = 0U;
+                }
+            }
+            else if (ev.type == PATH_EV_ERROR)
+            {
+                s_map_active = 0U;
+            }
+            continue;
+        }
 
         if (ev.type == PATH_EV_ARRIVE_POINT)
         {
@@ -394,6 +471,14 @@ void App_Debug_HandlePathEvents(void)
 
 void App_Debug_Update(void)
 {
+    /* 仅跑图：任务点 1 s 停顿结束后放行路径 */
+    if (s_map_active != 0U && s_map_waiting != 0U
+        && (int32_t)(HAL_GetTick() - s_map_wait_ms) >= 0)
+    {
+        s_map_waiting = 0U;
+        (void)Chassis_Path_NotifyTaskDone(s_map_point);
+    }
+
     /* S14 键 9：演示模式 A→B→C→D 全流程（动作逐个完成） */
     if (s_full_flow != 0U)
     {
@@ -863,7 +948,12 @@ void App_Debug_HandleKey(uint8_t key)
     }
     else if (key == (uint8_t)'8')
     {
-        (void)Mission_StartToA();
+        /* 仅跑图：整条 0→4，任务点停 1 s 代替机械臂动作 */
+        if (Mission_GetState() == MISSION_STATE_IDLE
+            && App_Debug_IsDemoActive() == 0U)
+        {
+            App_Debug_StartMapRun();
+        }
     }
     else if (key == (uint8_t)'7')
     {
@@ -900,20 +990,11 @@ void App_Debug_HandleKey(uint8_t key)
     }
     else if (key == (uint8_t)'5')
     {
-        /* C 两位姿切换：第一次到通用展开，第二次到 C 预存，循环 */
+        /* 检验机械臂展开态高度：直接到通用展开位 */
         if (Mission_GetState() == MISSION_STATE_IDLE
             && App_Debug_IsDemoActive() == 0U)
         {
-            if (s_c_pose_sel == 0U)
-            {
-                (void)Arm_MovePwm(s_pose_common, DEMO_ARM_MS);
-                s_c_pose_sel = 1U;
-            }
-            else
-            {
-                (void)Arm_MovePwm(s_pose_c, DEMO_ARM_MS);
-                s_c_pose_sel = 0U;
-            }
+            (void)Arm_MovePwm(s_pose_common, DEMO_ARM_MS);
         }
     }
     else if (key == (uint8_t)'4')
@@ -2411,6 +2492,29 @@ static void debug_refresh_body(void)
 
 void App_Debug_Refresh(void)
 {
+    /* 扫码结果：全屏大圆/大叉覆盖，到期恢复调试页 */
+    if (s_big_until != 0U)
+    {
+        if ((int32_t)(HAL_GetTick() - s_big_until) < 0)
+        {
+            if (s_big_result == 1U)
+            {
+                Oled_DrawBigCircle();
+            }
+            else if (s_big_result == 2U)
+            {
+                Oled_DrawBigCross();
+            }
+            else
+            {
+                Oled_DrawBigDigit(s_big_digit);
+            }
+            return;
+        }
+        s_big_until = 0U;
+        Oled_Clear();
+    }
+
     debug_refresh_body();
 
     /* 审计 H8/H9：上次复位前的故障记录（栈溢出 / 内存申请失败 / HardFault /

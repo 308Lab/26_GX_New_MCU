@@ -50,7 +50,7 @@ typedef enum
 #define APP_DEBUG_FIXED_STEP  DEBUG_STEP_S14
 #endif
 #elif (APP_STAGE == APP_STAGE_ARM)
-#define APP_DEBUG_FIXED_STEP  DEBUG_STEP_S20
+#define APP_DEBUG_FIXED_STEP  DEBUG_STEP_S21
 #else
 #define APP_DEBUG_FIXED_STEP  DEBUG_STEP_S14
 #endif
@@ -86,9 +86,16 @@ void App_Debug_Update(void);
 /* 每 5ms 调用一次：处理路径层事件（扫描/到点/完成） */
 void App_Debug_HandlePathEvents(void);
 
+/* 全屏扫码结果：ok=1 大圆圈，ok=0 大叉；覆盖指定毫秒后恢复调试页 */
+void App_Debug_ShowScanResult(uint8_t ok, uint32_t ms);
+
+/* 全屏显示名次大数字（0/1/2），持续 3 秒 */
+void App_Debug_ShowRank(uint8_t rank);
+
 /* 演示流程（无视觉）公共入口。正式模式扫码失败或模拟按键时接管。 */
 void    App_Debug_StartDemo(void);        /* 从起点开始完整演示 */
 void    App_Debug_StartToA(void);         /* 纯路径：起点→A，停车后结束 */
+void    App_Debug_StartMapRun(void);      /* 仅跑图：0→4，任务点停 1 s 代替机械臂 */
 void    App_Debug_StartDemoFromA(void);   /* A 点扫码失败：J1 已右转，从回正继续 */
 void    App_Debug_StartDemoFromC(void);   /* 仅跑 C：从通用展开开始，跑完收起即停 */
 void    App_Debug_StopDemo(void);

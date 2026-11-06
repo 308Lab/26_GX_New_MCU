@@ -112,6 +112,10 @@ uint8_t Vision_Link_IsOnline(void);
 /* A 点扫码 0x10：1s x 3 次，结果事件 SCAN_OK / SCAN_ERROR / SCAN_TIMEOUT */
 int Vision_Link_RequestScanCode(void);
 
+/* v1.6 §5.1：取最近一次扫码成功的三位原文 d1/d2/d3。
+   返回 1=有效（本次扫码成功且三位已保存），0=尚无结果。 */
+uint8_t Vision_Link_GetScanCode(uint8_t code[3]);
+
 /* 开始扫描 0x28/0x38/0x48：无应答，发送即返回 */
 int Vision_Link_StartScan(Vision_Zone_e zone);
 

@@ -253,6 +253,121 @@ void Oled_DrawStr(uint8_t x, uint8_t page, const char *s)
     }
 }
 
+static void oled_set_pixel(int16_t x, int16_t y)
+{
+    if ((x < 0) || (x >= (int16_t)OLED_WIDTH)
+        || (y < 0) || (y >= (int16_t)OLED_HEIGHT))
+    {
+        return;
+    }
+    s_gram[y / 8][x] |= (uint8_t)(1U << (y % 8));
+}
+
+static void oled_draw_thick_point(int16_t x, int16_t y, int16_t w)
+{
+    int16_t dx;
+    int16_t dy;
+
+    for (dy = -w; dy <= w; dy++)
+    {
+        for (dx = -w; dx <= w; dx++)
+        {
+            oled_set_pixel((int16_t)(x + dx), (int16_t)(y + dy));
+        }
+    }
+}
+
+/* 把 5x7 字符按 scale 倍放大绘制到显存 */
+static void oled_draw_big_glyph(const uint8_t *glyph, uint8_t x0, uint8_t y0,
+                                uint8_t scale)
+{
+    uint8_t col;
+    uint8_t row;
+    uint8_t dx;
+    uint8_t dy;
+
+    for (col = 0U; col < 5U; col++)
+    {
+        for (row = 0U; row < 7U; row++)
+        {
+            if ((glyph[col] & (uint8_t)(1U << row)) == 0U)
+            {
+                continue;
+            }
+            for (dy = 0U; dy < scale; dy++)
+            {
+                for (dx = 0U; dx < scale; dx++)
+                {
+                    oled_set_pixel((int16_t)(x0 + col * scale + dx),
+                                   (int16_t)(y0 + row * scale + dy));
+                }
+            }
+        }
+    }
+}
+
+void Oled_DrawBigDigit(uint8_t digit)
+{
+    memset(s_gram, 0, sizeof(s_gram));
+
+    if (digit > 9U)
+    {
+        digit = 0U;
+    }
+
+    /* 5x7 字体放大 8 倍：单字 40x56，水平居中 */
+    oled_draw_big_glyph(s_font5x7[(uint8_t)('0' - 0x20) + digit], 44U, 4U, 8U);
+
+    Oled_Flush();
+}
+
+void Oled_DrawBigCircle(void)
+{
+    const int16_t cx = 64;
+    const int16_t cy = 32;
+    const int16_t r_in = 24;
+    const int16_t r_out = 30;
+    int16_t x;
+    int16_t y;
+
+    memset(s_gram, 0, sizeof(s_gram));
+
+    for (y = 0; y < (int16_t)OLED_HEIGHT; y++)
+    {
+        for (x = 0; x < (int16_t)OLED_WIDTH; x++)
+        {
+            int16_t dx = (int16_t)(x - cx);
+            int16_t dy = (int16_t)(y - cy);
+            int16_t d2 = (int16_t)(dx * dx + dy * dy);
+
+            if ((d2 >= (int16_t)(r_in * r_in)) && (d2 <= (int16_t)(r_out * r_out)))
+            {
+                oled_set_pixel(x, y);
+            }
+        }
+    }
+
+    Oled_Flush();
+}
+
+void Oled_DrawBigCross(void)
+{
+    const int16_t cx = 64;
+    const int16_t cy = 32;
+    const int16_t len = 24;
+    int16_t t;
+
+    memset(s_gram, 0, sizeof(s_gram));
+
+    for (t = -len; t <= len; t++)
+    {
+        oled_draw_thick_point((int16_t)(cx + t), (int16_t)(cy + t), 3);
+        oled_draw_thick_point((int16_t)(cx + t), (int16_t)(cy - t), 3);
+    }
+
+    Oled_Flush();
+}
+
 void Oled_DrawStrLine(uint8_t page, const char *s)
 {
     uint8_t i;
