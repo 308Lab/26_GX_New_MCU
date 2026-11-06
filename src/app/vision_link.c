@@ -259,6 +259,12 @@ static uint8_t vision_cmd_payload_ok(uint8_t cmd, uint8_t len, const uint8_t *da
 {
     switch (cmd)
     {
+    case VISION_CMD_HEARTBEAT:
+        /* 心跳（v1.5.1 §4）是上位机单向 5Hz 空载荷帧，收到不回 ACK。
+           以前这里没有分支，心跳落到 default 被当成非法载荷，err_payload 每拍
+           涨一次，现场排查时会误以为协议出错。 */
+        return (len == 0U) ? 1U : 0U;
+
     case VISION_CMD_SCAN_CODE_OK:
     case VISION_CMD_TARGET_LOST:
     case VISION_CMD_C_TARGET_DOWN:
