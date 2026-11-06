@@ -36,12 +36,16 @@ static int16_t  s_midline_result;    /* v1.6：int16 千分比偏移量，VISION
 static int16_t  s_midline_last;      /* 最近一次判定（同样是偏移量） */
 static int8_t   s_midline_dir;      /* -1=后退 0=停 +1=前进 */
 static uint8_t  s_midline_no_resp;
+static uint8_t  s_midline_probe;      /* 1 = 本轮未检出时允许慢速前进探格（首次对准） */
+static uint8_t  s_midline_probe_cnt;  /* 已探步数 */
 static uint32_t s_midline_start_ms;
 static uint32_t s_midline_next_ms;
 static uint32_t s_midline_rx_count;
 static uint32_t s_midline_rx_seen;
 static int16_t  s_align_mm;        /* 首次对准基准之后累计的实际位移 */
 static uint8_t  s_align_accum;     /* 下一条 AUX_DONE 是否计入 s_align_mm */
+static uint8_t  s_b_demo;          /* 1 = B 抓取复核发现目标还在，改走演示动作 */
+static uint8_t  s_order_got;       /* 本轮名次请求是否真的收到 0x2A（区分兜底值） */
 static uint8_t  s_target_down;
 static uint8_t  s_path_done;
 static uint8_t  s_link_down;
@@ -55,7 +59,9 @@ static uint8_t  s_stop_after_a;
 static const uint16_t POSE_A_SCAN[3] __attribute__((unused)) = MISSION_POSE_A_SCAN;
 static const uint16_t POSE_COMMON[3] = MISSION_POSE_COMMON_OPEN;
 static const uint16_t POSE_B[3]      = MISSION_POSE_B_PRESET;
+static const uint16_t POSE_B_DEMO[3] = MISSION_POSE_B_DEMO;
 static const uint16_t POSE_B_BUCKET[3] = MISSION_POSE_B_BUCKET;
+static const uint16_t POSE_B_BUCKET_DEMO[3] = MISSION_POSE_B_BUCKET_DEMO;
 static const uint16_t POSE_C[3]      = MISSION_POSE_C_PRESET;
 static const uint16_t POSE_D[3]      = MISSION_POSE_D_PRESET;
 static const uint16_t POSE_STOW[3]   = MISSION_POSE_STOW;
@@ -89,6 +95,8 @@ static void mission_enter(Mission_State_e st)
     s_state_ms = HAL_GetTick();
     s_t_ms = HAL_GetTick();
     s_order_ready = 0U;
+    s_order_got = 0U;
+    s_b_demo = 0U;
     s_rank_moving = 0U;
     s_midline_got = 0U;
     s_midline_result = VISION_LINK_MIDLINE_UNDETECTED;
@@ -199,6 +207,7 @@ static void mission_pump(void)
             break;
 
         case VISION_EV_ORDER:
+            s_order_got = 1U;
             s_rank = ve.value;
             if (s_rank > 2U)
             {
@@ -305,6 +314,7 @@ static int mission_rank_move_step(void)
 static void mission_request_order(Vision_Zone_e zone, uint32_t now)
 {
     s_order_ready = 0U;
+    s_order_got = 0U;
     s_rank = 1U;
 
     if (Vision_Link_RequestOrder(zone, 0U) == VISION_LINK_OK)
@@ -377,13 +387,15 @@ static void mission_midline_drive(int8_t dir)
     }
 }
 
-static void mission_midline_start(Vision_Zone_e zone, uint32_t now)
+static void mission_midline_start(Vision_Zone_e zone, uint32_t now, uint8_t allow_probe)
 {
     s_midline_got = 0U;
     s_midline_result = VISION_LINK_MIDLINE_UNDETECTED;
     s_midline_last = VISION_LINK_MIDLINE_UNDETECTED;
     s_midline_dir = 0;
     s_midline_no_resp = 0U;
+    s_midline_probe = allow_probe;
+    s_midline_probe_cnt = 0U;
     s_midline_rx_count = 0U;
     s_midline_rx_seen = 0U;
     s_midline_start_ms = now;
@@ -403,8 +415,17 @@ static int mission_midline_step(Vision_Zone_e zone, uint32_t now)
 
         if (s_midline_last == VISION_LINK_MIDLINE_UNDETECTED)
         {
-            /* 没看见：停车等下一帧。绝不能沿用上一帧的方向继续走。 */
-            mission_midline_drive(0);
+            /* 没看见：绝不沿用上一帧的方向。v1.6 没有纵向修正量了，
+               首次对准时允许慢速前进探几格找回目标，复核阶段只停车。 */
+            if ((s_midline_probe != 0U) && (s_midline_probe_cnt < MISSION_MIDLINE_PROBE_MAX))
+            {
+                s_midline_probe_cnt++;
+                mission_midline_drive(1);
+            }
+            else
+            {
+                mission_midline_drive(0);
+            }
         }
         else if ((s_midline_last <= MISSION_MIDLINE_DEADBAND_PERM)
                  && (s_midline_last >= -MISSION_MIDLINE_DEADBAND_PERM))
@@ -453,6 +474,8 @@ static int mission_midline_step(Vision_Zone_e zone, uint32_t now)
     /* 按最近一次判定维持低速连续运动 */
     if (s_midline_last == VISION_LINK_MIDLINE_UNDETECTED)
     {
+        /* 维持段不再探格：探一步的时机只在「新结果到达」那一拍，
+           否则 5ms 一拍的维持循环会把 6 步探格变成连续前进。 */
         mission_midline_drive(0);
     }
     else if (s_midline_last > MISSION_MIDLINE_DEADBAND_PERM)
@@ -558,7 +581,7 @@ static void mission_run_b(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         /* 展开到位后开始扫描并做首次中位线对准 */
         (void)Vision_Link_StartScan(VISION_ZONE_B);
-        mission_midline_start(VISION_ZONE_B, now);
+        mission_midline_start(VISION_ZONE_B, now, 1U);
         s_sub = 32U;
         break;
 
@@ -578,7 +601,7 @@ static void mission_run_b(uint32_t now)
 
     case 31U: /* 按名次前后移动到目标球 */
         if (mission_rank_move_step() == 0) break;
-        mission_midline_start(VISION_ZONE_B, now);   /* 到位后重新定位 */
+        mission_midline_start(VISION_ZONE_B, now, 0U);   /* 到位后重新定位 */
         s_sub = 34U;
         break;
 
@@ -614,6 +637,53 @@ static void mission_run_b(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
+        s_sub = 40U;
+        break;
+
+    /* ---- v1.6 抓取复核：追踪帧废止后没有「抓到了没」的反馈，
+       改用「重新开一次扫描会话再要名次」：球被夹走后不在画面里，
+       视觉不会回 0x2A，等到兜底就判成功；回了名次说明球还在，转演示动作。 ---- */
+    case 40U:
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Vision_Link_StartScan(VISION_ZONE_B);
+        s_t_ms = now + MISSION_B_CHECK_SETTLE_MS;
+        s_sub = 41U;
+        break;
+
+    case 41U:
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        mission_request_order(VISION_ZONE_B, now);
+        s_t_ms = now + MISSION_B_CHECK_ORDER_MS;
+        s_sub = 42U;
+        break;
+
+    case 42U:
+        if (s_order_ready == 0U && (int32_t)(now - s_t_ms) < 0) break;
+        if (s_order_got != 0U)
+        {
+            /* 目标仍在画面：这一夹没夹到，改走演示取球/放桶动作 */
+            s_b_demo = 1U;
+            (void)Arm_MovePwm(POSE_B_DEMO, MISSION_ARM_MS);
+            s_t_ms = now + MISSION_ARM_MS;
+            s_sub = 23U;
+        }
+        else
+        {
+            s_sub = 11U;
+        }
+        break;
+
+    case 23U: /* 演示抓取：取球位姿到位后直接夹 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_Grasp();
+        s_t_ms = now + MISSION_GRIP_MS;
+        s_sub = 24U;
+        break;
+
+    case 24U: /* 演示抓取后回展开，继续放桶流程 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
         s_sub = 11U;
         break;
 
@@ -642,7 +712,28 @@ static void mission_run_b(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_MoveBaseRelative(-180.0f);
         s_t_ms = now + MISSION_J1_180_MS + MISSION_GAP_MS;
-        s_sub = 13U;
+        s_sub = (s_b_demo != 0U) ? 25U : 13U;
+        break;
+
+    case 25U: /* 演示放桶位 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_B_BUCKET_DEMO, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS;
+        s_sub = 26U;
+        break;
+
+    case 26U: /* 演示放桶：直接张开释放 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_Release();
+        s_t_ms = now + MISSION_GRIP_MS;
+        s_sub = 27U;
+        break;
+
+    case 27U: /* 演示放桶后回展开，随后 J1 回正 */
+        if ((int32_t)(now - s_t_ms) < 0) break;
+        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
+        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
+        s_sub = 20U;
         break;
 
     case 13U:
@@ -727,7 +818,7 @@ static void mission_run_c(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         /* 展开到位后开始扫描并做首次中位线对准 */
         (void)Vision_Link_StartScan(VISION_ZONE_C);
-        mission_midline_start(VISION_ZONE_C, now);
+        mission_midline_start(VISION_ZONE_C, now, 1U);
         s_sub = 32U;
         break;
 
@@ -744,7 +835,7 @@ static void mission_run_c(uint32_t now)
 
     case 31U: /* 按名次前后移动到目标靶 */
         if (mission_rank_move_step() == 0) break;
-        mission_midline_start(VISION_ZONE_C, now);   /* 到位后重新定位 */
+        mission_midline_start(VISION_ZONE_C, now, 0U);   /* 到位后重新定位 */
         s_sub = 34U;
         break;
 
@@ -829,7 +920,7 @@ static void mission_run_d(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         /* 展开到位后开始扫描并做首次中位线对准 */
         (void)Vision_Link_StartScan(VISION_ZONE_D);
-        mission_midline_start(VISION_ZONE_D, now);
+        mission_midline_start(VISION_ZONE_D, now, 1U);
         s_sub = 32U;
         break;
 
@@ -846,7 +937,7 @@ static void mission_run_d(uint32_t now)
 
     case 31U: /* 按名次前后移动到目标 */
         if (mission_rank_move_step() == 0) break;
-        mission_midline_start(VISION_ZONE_D, now);   /* 到位后重新定位 */
+        mission_midline_start(VISION_ZONE_D, now, 0U);   /* 到位后重新定位 */
         s_sub = 34U;
         break;
 

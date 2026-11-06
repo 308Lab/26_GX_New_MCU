@@ -32,6 +32,14 @@
 #define MISSION_MIDLINE_PERIOD_MS    (500U)    /* 中位线请求周期 */
 #define MISSION_MIDLINE_NO_RESP      (3U)      /* 连续无响应窗口数上限 */
 #define MISSION_MIDLINE_TOTAL_MS     (5000U)   /* 对准总超时 */
+/* v1.6：追踪帧废止后没有纵向修正量，用「未检出就慢速前进探一格」补纵向粗对准。
+   只在首次对准时启用，复核阶段不探（防止顶到目标）。 */
+/* 每 500 ms 一帧结果，未检出就慢速前进一格（≈ v*0.5s = 25 mm），
+   3 格 ≈ 75 mm 足够把目标重新拉进画面，再多容易顶上去。 */
+#define MISSION_MIDLINE_PROBE_MAX    (3U)
+/* B 段抓取复核：重新开扫描会话→请求名次，收不到 0x2A 说明目标不在画面 = 抓到了 */
+#define MISSION_B_CHECK_SETTLE_MS    (300U)
+#define MISSION_B_CHECK_ORDER_MS     (1500U)
 
 /* v1.6 废止追踪帧（0x22-0x27/0x32-0x34/0x42-0x44），
    MISSION_TRACK_* 与 C 段底盘伺服（MISSION_SERVO_*）一并退役：
