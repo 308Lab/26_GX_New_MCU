@@ -204,10 +204,14 @@ static void mission_pump(void)
             break;
 
         case VISION_EV_MIDLINE:
-            /* v1.6 §5.3：偏移量在 value16（千分比，+ = 目标在中线右侧） */
+            /* v1.6 §5.3：偏移量在 value16（千分比，+ = 目标在中线右侧）。
+             * 只有有效偏移量才计入 rx_count；0x8000 是「没看见」，不是「在通信」。 */
             s_midline_result = ve.value16;
             s_midline_got = 1U;
-            s_midline_rx_count++;
+            if (ve.value16 != VISION_LINK_MIDLINE_UNDETECTED)
+            {
+                s_midline_rx_count++;
+            }
             break;
 
         case VISION_EV_ORDER:
@@ -466,17 +470,24 @@ static int mission_midline_step(Vision_Zone_e zone, uint32_t now)
         return 1;
     }
 
-    /* 每 500 ms 一帧：统计无响应并重发 */
+    /* 每 500 ms 一帧：统计本窗口有没有**有效判定**，没有就重发 */
     if ((int32_t)(now - s_midline_next_ms) >= 0)
     {
-        if (s_midline_rx_count == s_midline_rx_seen)
+        uint8_t got_valid = (s_midline_rx_count != s_midline_rx_seen) ? 1U : 0U;
+
+        s_midline_rx_seen = s_midline_rx_count;
+
+        /* 只有「回了有效偏移量」才算响应。视觉没目标时也会回 0x8000，
+         * 那是「没看见」而不是「在通信」，不能拿来刷新无响应计数 ——
+         * 否则「连续 N 窗口无响应」这条快速失败路径永远是死代码，
+         * 只能等 5 s 总超时。 */
+        if (got_valid != 0U)
         {
-            s_midline_no_resp++;
+            s_midline_no_resp = 0U;
         }
         else
         {
-            s_midline_no_resp = 0U;
-            s_midline_rx_seen = s_midline_rx_count;
+            s_midline_no_resp++;
         }
 
         /* 连续 3 个窗口无响应：原地停车，开始任务 */
@@ -828,8 +839,14 @@ static void mission_run_c(uint32_t now)
 {
     switch (s_sub)
     {
-    case 0U: /* 到点后先扫描 + 中位线第一次，暂不展开机械臂 */
+    case 0U: /* 到点后先扫描，中位线请求隔一拍再发，避免两个请求抢同一拍预算 */
         (void)Vision_Link_StartScan(VISION_ZONE_C);
+        s_t_ms = now + MISSION_SCAN_SETTLE_MS;
+        s_sub = 3U;
+        break;
+
+    case 3U:
+        if ((int32_t)(now - s_t_ms) < 0) break;
         mission_midline_start(VISION_ZONE_C, now, 1U, 0U);   /* 首次：不指定，校准车体 */
         s_sub = 32U;
         break;
@@ -960,8 +977,14 @@ static void mission_run_d(uint32_t now)
 
     case 2U:
         if ((int32_t)(now - s_t_ms) < 0) break;
-        /* 展开到位后开始扫描并做首次中位线对准 */
+        /* 展开到位后开始扫描；中位线请求隔一拍再发，避免两个请求抢同一拍预算 */
         (void)Vision_Link_StartScan(VISION_ZONE_D);
+        s_t_ms = now + MISSION_SCAN_SETTLE_MS;
+        s_sub = 3U;
+        break;
+
+    case 3U:
+        if ((int32_t)(now - s_t_ms) < 0) break;
         mission_midline_start(VISION_ZONE_D, now, 1U, 0U);   /* 首次：不指定，校准车体 */
         s_sub = 32U;
         break;

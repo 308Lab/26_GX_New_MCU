@@ -31,7 +31,7 @@
    换成偏移量后判据不变，只是不再由视觉侧替 MCU 判。 */
 #define MISSION_MIDLINE_DEADBAND_PERM (50)
 #define MISSION_MIDLINE_PERIOD_MS    (500U)    /* 中位线请求周期 */
-#define MISSION_MIDLINE_NO_RESP      (3U)      /* 连续无响应窗口数上限 */
+#define MISSION_MIDLINE_NO_RESP      (3U)      /* 连续无有效判定的窗口数上限（0x8000「未检出」与无回包都算没有判定） */
 #define MISSION_MIDLINE_TOTAL_MS     (5000U)   /* 对准总超时 */
 /* v1.6：追踪帧废止后没有纵向修正量，用「未检出就慢速前进探一格」补纵向粗对准。
    只在首次对准时启用，复核阶段不探（防止顶到目标）。 */
@@ -45,7 +45,8 @@
 #define MISSION_B_CHECK_SETTLE_MS    (300U)
 #define MISSION_B_CHECK_ORDER_MS     (1500U)
 /* 开扫描会话（0x28/0x38/0x48）与首次中位线请求（0x20/0x30/0x40）之间必须隔开：
-   同拍下发会在视觉还没建立扫描会话时就问中位线，且两个请求抢同一拍的发送预算。 */
+   同拍下发会在视觉还没建立扫描会话时就问中位线，且两个请求抢同一拍的发送预算，
+   视觉侧每帧都要重跑一次检测。300 ms 够一帧处理完，又不明显拖延发车。 */
 #define MISSION_SCAN_SETTLE_MS       (300U)
 
 /* v1.6 废止追踪帧（0x22-0x27/0x32-0x34/0x42-0x44），

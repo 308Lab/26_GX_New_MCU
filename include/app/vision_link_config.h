@@ -49,8 +49,12 @@
 /* 扫码：发出后 3s 仍无响应判失败 */
 #define VISION_LINK_SCAN_RESPONSE_TIMEOUT_MS (3000U)
 /* v1.6 §5.3 的「未检出」哨兵值定义在 vision_link.h（业务层也要用它判未检出） */
-/* 中位线：500ms 无回包重发，可反复请求 */
+/* 中位线请求周期：**重发只由业务层驱动**（mission 每 MISSION_MIDLINE_PERIOD_MS 一帧），
+   这里只保留 pending 初始化时写进 next_tx_ms 的占位值，pending 不再自动重发。 */
 #define VISION_LINK_MIDLINE_RETRY_MS         (500U)
+/* 扫描会话（0x28/0x38/0x48）最小间隔：这类帧不占 pending、不重发，重复调用会连发，
+   而视觉每收一帧都会重开候选累加器，把名次判据打乱 */
+#define VISION_LINK_SCAN_SESSION_MIN_MS      (300U)
 /* 审计 H6：中位线 pending 生命周期上限。上位机侧 midline_reply_ttl=500ms 且以同一周期
    重发 0x20，MCU 侧超时必须明显长于该周期，否则会把「上位机正在重试」误判成失败；
    取 4 个重发窗口 = 2000ms，同时短于 mission 的 5s 中位线总超时，

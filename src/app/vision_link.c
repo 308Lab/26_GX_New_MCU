@@ -98,6 +98,11 @@ static uint8_t  s_ever_online;
 static Vision_Pending_t s_pending;
 static uint8_t  s_update_tx_left;
 
+/* 扫描会话（0x28/0x38/0x48）节流：每个区域记最近一次真正发出的时刻。
+ * 这类帧不占 s_pending 槽、也不重发，业务层连续调用就会变成连发，
+ * 视觉侧每收一帧都会重开一次扫描会话（清空候选累加器），把名次判据打乱。 */
+static uint32_t s_scan_sent_ms[VISION_ZONE_D + 1U];
+
 /* 事件环，只在任务上下文生产/消费 */
 static Vision_Event_t s_evq[VISION_LINK_EVENT_QUEUE_LEN];
 static uint8_t s_ev_head;
@@ -847,32 +852,20 @@ static void vision_pending_service(uint32_t now)
 
     case VISION_PEND_MIDLINE:
         /* 审计 H6：pending 必须有生命周期上限，否则一旦没人 CancelMidline，
-         * 整个视觉链路会被 RequestOrder/RequestScanCode/TrackStart 的 ERR_BUSY 永久堵死。
-         * 超时只上报事件并清 pending，不重发、不停车，控制权交回业务层。 */
+         * 整个视觉链路会被 RequestOrder/RequestScanCode 的 ERR_BUSY 永久堵死。
+         * 超时只上报事件并清 pending，不重发、不停车，控制权交回业务层。
+         *
+         * ★ 中位线重发只由业务层驱动（mission 每 MISSION_MIDLINE_PERIOD_MS 一帧）。
+         *   这里以前还会按 VISION_LINK_MIDLINE_RETRY_MS 自动重发，两套节拍在 500ms
+         *   边界上会撞成同拍双帧：视觉对每个 0x20 都回一帧 0x21，于是「一次请求两个
+         *   应答」，其中一个还会被判成 late_responses；自动重发还会让视觉命中
+         *   midline_reply_ttl 缓存、回同一个旧判定，业务层的无响应计数永远归零，
+         *   5 s 总超时之前一直白等。 */
         if ((int32_t)(now - s_pending.deadline_ms) >= 0)
         {
             vision_emit(VISION_EV_VISION_ERROR, s_pending.zone, s_pending.tx_cmd,
                         0U, VISION_REASON_TIMEOUT, 0U);
             vision_pending_clear();
-            break;
-        }
-
-        if ((int32_t)(now - s_pending.next_tx_ms) >= 0)
-        {
-            ret = vision_update_send(s_pending.tx_cmd, &s_pending.sel, 1U);
-            if (ret == VISION_LINK_ERR_NO_BUDGET)
-            {
-                break;
-            }
-            if ((ret == VISION_LINK_ERR_UART) && (s_pending.tx_error_reported == 0U))
-            {
-                s_pending.tx_error_reported = 1U;
-                vision_emit(VISION_EV_TX_ERROR, s_pending.zone, s_pending.tx_cmd,
-                            0U, VISION_REASON_UART, 0U);
-            }
-            s_pending.tx_count++;
-            s_pending.next_tx_ms = now + VISION_LINK_MIDLINE_RETRY_MS;
-            s_stats.retries++;
         }
         break;
 
@@ -1069,6 +1062,7 @@ uint8_t Vision_Link_GetScanCode(uint8_t code[3])
 int Vision_Link_StartScan(Vision_Zone_e zone)
 {
     uint8_t cmd = vision_zone_cmd(zone, VISION_CMD_B_SCAN);
+    uint32_t now;
 
     if (cmd == 0U)
     {
@@ -1083,7 +1077,30 @@ int Vision_Link_StartScan(Vision_Zone_e zone)
         return VISION_LINK_ERR_BUSY;
     }
 
-    return vision_send_raw(cmd, NULL, 0U);
+    /* 同一区域两次扫描会话至少间隔 VISION_LINK_SCAN_SESSION_MIN_MS：
+     * 这一帧不占 pending、不重发，业务层在状态切换处反复调用就会变成连发，
+     * 而视觉每收到一帧都会 Begin() 重开候选累加器。重复调用按「已经开过」返回 OK，
+     * 不报错，避免把业务层逼进重试分支。 */
+    now = HAL_GetTick();
+    if ((uint32_t)zone <= (uint32_t)VISION_ZONE_D)
+    {
+        if ((s_scan_sent_ms[zone] != 0U)
+            && ((uint32_t)(now - s_scan_sent_ms[zone]) < VISION_LINK_SCAN_SESSION_MIN_MS))
+        {
+            return VISION_LINK_OK;
+        }
+    }
+
+    if (vision_send_raw(cmd, NULL, 0U) != VISION_LINK_OK)
+    {
+        return VISION_LINK_ERR_UART;
+    }
+    if ((uint32_t)zone <= (uint32_t)VISION_ZONE_D)
+    {
+        s_scan_sent_ms[zone] = now;
+    }
+
+    return VISION_LINK_OK;
 }
 
 int Vision_Link_RequestMidline(Vision_Zone_e zone, uint8_t sel)
