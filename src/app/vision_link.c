@@ -55,6 +55,7 @@ typedef struct
     uint8_t  zone;
     uint8_t  tx_cmd;
     uint8_t  tx_error_reported;
+    uint8_t  sel;        /* v1.6：0x20/0x29 的 1 字节选择字段（0 = 不指定） */
     uint16_t tx_count;
     uint32_t next_tx_ms;
     uint32_t deadline_ms;
@@ -79,7 +80,6 @@ static volatile uint8_t  s_rx_head;
 static volatile uint8_t  s_rx_tail;
 
 /* 追踪流最新值槽，ISR 覆盖写 */
-static Vision_TrackSlot_t s_track[VISION_LINK_TRACK_SLOT_COUNT];
 
 /* 心跳/链路时间戳 */
 static volatile uint32_t s_last_rx_ms;
@@ -92,12 +92,6 @@ static volatile uint32_t s_ack_mask[VISION_ACK_WORDS];
 static uint8_t  s_online;
 static uint8_t  s_ever_online;
 static Vision_Pending_t s_pending;
-static uint8_t  s_track_active;
-static uint32_t s_last_seen_seq;
-static uint8_t  s_loss_count;
-static uint8_t  s_loss_reported;
-static uint8_t  s_loss5_reported;
-static uint32_t s_loss_next_ms;
 static uint8_t  s_update_tx_left;
 
 /* 事件环，只在任务上下文生产/消费 */
@@ -129,93 +123,10 @@ static uint8_t vision_zone_cmd(Vision_Zone_e zone, uint8_t base)
     }
 }
 
-static uint8_t vision_track_start_cmd(uint8_t target)
-{
-    switch (target)
-    {
-    case VISION_TRACK_B_OBJECT:
-        return VISION_CMD_B_TRACK_START;
-    case VISION_TRACK_B_BUCKET:
-        return VISION_CMD_B_BUCKET_START;
-    case VISION_TRACK_C:
-        return VISION_CMD_C_TRACK_START;
-    case VISION_TRACK_D:
-        return VISION_CMD_D_TRACK_START;
-    default:
-        return 0U;
-    }
-}
 
-static uint8_t vision_track_stop_cmd(uint8_t target)
-{
-    switch (target)
-    {
-    case VISION_TRACK_B_OBJECT:
-        return VISION_CMD_B_TRACK_STOP;
-    case VISION_TRACK_B_BUCKET:
-        return VISION_CMD_B_BUCKET_STOP;
-    case VISION_TRACK_C:
-        return VISION_CMD_C_TRACK_STOP;
-    case VISION_TRACK_D:
-        return VISION_CMD_D_TRACK_STOP;
-    default:
-        return 0U;
-    }
-}
 
-static uint8_t vision_track_index(uint8_t target)
-{
-    switch (target)
-    {
-    case VISION_TRACK_B_OBJECT:
-        return 0U;
-    case VISION_TRACK_B_BUCKET:
-        return 1U;
-    case VISION_TRACK_C:
-        return 2U;
-    case VISION_TRACK_D:
-        return 3U;
-    default:
-        return 0xFFU;
-    }
-}
 
-static uint8_t vision_track_flow_index(uint8_t cmd, uint8_t *idx)
-{
-    switch (cmd)
-    {
-    case VISION_CMD_B_TRACK_OFFSET:
-        *idx = 0U;
-        return 1U;
-    case VISION_CMD_B_BUCKET_OFFSET:
-        *idx = 1U;
-        return 1U;
-    case VISION_CMD_C_TRACK_OFFSET:
-        *idx = 2U;
-        return 1U;
-    case VISION_CMD_D_TRACK_OFFSET:
-        *idx = 3U;
-        return 1U;
-    default:
-        return 0U;
-    }
-}
 
-static uint8_t vision_track_zone(uint8_t target)
-{
-    switch (target)
-    {
-    case VISION_TRACK_B_OBJECT:
-    case VISION_TRACK_B_BUCKET:
-        return VISION_ZONE_B;
-    case VISION_TRACK_C:
-        return VISION_ZONE_C;
-    case VISION_TRACK_D:
-        return VISION_ZONE_D;
-    default:
-        return VISION_ZONE_NONE;
-    }
-}
 
 static uint8_t vision_response_zone(uint8_t cmd)
 {
@@ -266,17 +177,23 @@ static uint8_t vision_cmd_payload_ok(uint8_t cmd, uint8_t len, const uint8_t *da
         return (len == 0U) ? 1U : 0U;
 
     case VISION_CMD_SCAN_CODE_OK:
+        /* v1.6 §5.1：LEN 0 -> 4（ok,d1,d2,d3）。长度不符就是协议错位，
+           必须当非法帧丢掉，不能按旧协议"凑合收下"。 */
+        return (len == 4U) ? 1U : 0U;
+
     case VISION_CMD_TARGET_LOST:
     case VISION_CMD_C_TARGET_DOWN:
         return (len == 0U) ? 1U : 0U;
 
     case VISION_CMD_ERROR:
-        return ((len == 1U) && (data[0] >= 1U) && (data[0] <= 6U)) ? 1U : 0U;
+        /* v1.6 删掉错误码 6（深度无效），合法范围 1..5 */
+        return ((len == 1U) && (data[0] >= 1U) && (data[0] <= 5U)) ? 1U : 0U;
 
     case VISION_CMD_B_MIDLINE_RSP:
     case VISION_CMD_C_MIDLINE_RSP:
     case VISION_CMD_D_MIDLINE_RSP:
-        return ((len == 1U) && (data[0] <= 3U)) ? 1U : 0U;
+        /* v1.6 §5.3：LEN 1 -> 2，int16 大端千分比；任何取值都合法（含 0x8000 未检出） */
+        return (len == 2U) ? 1U : 0U;
 
     case VISION_CMD_B_ORDER_RSP:
     case VISION_CMD_C_ORDER_RSP:
@@ -359,28 +276,9 @@ static uint8_t vision_rxq_pop(Vision_Msg_t *out)
 
 static void vision_frame_dispatch(uint8_t cmd, uint8_t len, const uint8_t *data)
 {
-    uint8_t idx;
-
     s_stats.rx_frames++;
     s_last_rx_ms = HAL_GetTick();
     s_rx_seen = 1U;
-
-    /* 追踪流：只更新最新值槽，不排队、不回 ACK */
-    if (vision_track_flow_index(cmd, &idx) != 0U)
-    {
-        if ((len == 4U) && (idx < VISION_LINK_TRACK_SLOT_COUNT))
-        {
-            s_track[idx].dx_mm = (int16_t)vision_get_be16(&data[0]);
-            s_track[idx].dy_mm = (int16_t)vision_get_be16(&data[2]);
-            s_track[idx].tick_ms = s_last_rx_ms;
-            s_track[idx].seq++;
-        }
-        else
-        {
-            s_stats.err_payload++;
-        }
-        return;
-    }
 
     if (cmd == VISION_CMD_HEARTBEAT)
     {
@@ -654,8 +552,9 @@ static int vision_update_send(uint8_t cmd, const uint8_t *data, uint8_t len)
 
 /* ===================== 事件 ===================== */
 
-static uint8_t vision_emit(uint8_t type, uint8_t zone, uint8_t cmd,
-                           uint8_t value, uint8_t reason, uint8_t flags)
+static uint8_t vision_emit16(uint8_t type, uint8_t zone, uint8_t cmd,
+                             uint8_t value, uint8_t reason, uint8_t flags,
+                             int16_t value16)
 {
     uint8_t n = (uint8_t)((s_ev_head + 1U) & (VISION_LINK_EVENT_QUEUE_LEN - 1U));
 
@@ -673,11 +572,17 @@ static uint8_t vision_emit(uint8_t type, uint8_t zone, uint8_t cmd,
     s_evq[s_ev_head].value = value;
     s_evq[s_ev_head].reason = reason;
     s_evq[s_ev_head].flags = flags;
-    s_evq[s_ev_head].reserved[0] = 0U;
-    s_evq[s_ev_head].reserved[1] = 0U;
+    s_evq[s_ev_head].value16 = value16;
 
     s_ev_head = n;
     return 1U;
+}
+
+/* 不带 16 位载荷的事件（绝大多数）—— 包一层，避免每个调用点都写尾参数 */
+static uint8_t vision_emit(uint8_t type, uint8_t zone, uint8_t cmd,
+                           uint8_t value, uint8_t reason, uint8_t flags)
+{
+    return vision_emit16(type, zone, cmd, value, reason, flags, 0);
 }
 
 /* ===================== 任务侧服务 ===================== */
@@ -706,19 +611,12 @@ static void vision_pending_clear(void)
     s_pending.zone = VISION_ZONE_NONE;
     s_pending.tx_cmd = 0U;
     s_pending.tx_error_reported = 0U;
+    s_pending.sel = 0U;
     s_pending.tx_count = 0U;
     s_pending.next_tx_ms = 0U;
     s_pending.deadline_ms = 0U;
 }
 
-static void vision_track_reset_loss(void)
-{
-    s_last_seen_seq = 0U;
-    s_loss_count = 0U;
-    s_loss_reported = 0U;
-    s_loss5_reported = 0U;
-    s_loss_next_ms = 0U;
-}
 
 static void vision_parser_timeout_service(uint32_t now)
 {
@@ -751,12 +649,6 @@ static void vision_abort_all(void)
         vision_emit(VISION_EV_TXN_ABORTED, s_pending.zone, s_pending.tx_cmd,
                     0U, VISION_REASON_LINK_LOST, 0U);
         vision_pending_clear();
-    }
-
-    if (s_track_active != VISION_TRACK_NONE)
-    {
-        s_track_active = VISION_TRACK_NONE;
-        vision_track_reset_loss();
     }
 
     taskENTER_CRITICAL();
@@ -807,8 +699,10 @@ static void vision_rx_drain(void)
         case VISION_CMD_SCAN_CODE_OK:
             if (s_pending.kind == VISION_PEND_SCAN)
             {
+                /* v1.6 §5.1：data[0] = ok（1 扫到合法码）；d1..d3 是三位原文，
+                   MCU 不解释，只把 ok 位带进事件方便调试台复盘。 */
                 vision_emit(VISION_EV_SCAN_OK, VISION_ZONE_NONE, msg.cmd,
-                            0U, VISION_REASON_NONE, 0U);
+                            msg.data[0], VISION_REASON_NONE, 0U);
                 vision_pending_clear();
             }
             else
@@ -843,28 +737,13 @@ static void vision_rx_drain(void)
                             msg.data[0], VISION_REASON_NONE, 0U);
             }
 
-            /* 0x05 追踪 60s 超时：本地追踪同步失效，避免再报 5 次窗口 */
-            if (msg.data[0] == 5U)
-            {
-                s_track_active = VISION_TRACK_NONE;
-                vision_track_reset_loss();
-            }
+            /* 0x05（追踪超时）在 v1.6 不会再出现；错误码范围已收到 1..5，无需特判 */
             break;
 
         case VISION_CMD_TARGET_LOST:
-            if (s_track_active != VISION_TRACK_NONE)
-            {
-                if (s_loss_reported == 0U)
-                {
-                    vision_emit(VISION_EV_TARGET_LOST, vision_track_zone(s_track_active),
-                                msg.cmd, 0U, VISION_REASON_NONE, 0U);
-                    s_loss_reported = 1U;
-                }
-            }
-            else
-            {
-                s_stats.err_unexpected++;
-            }
+            /* v1.6 取消追踪后 0x13 不再对应本地追踪上下文，只作为普通事件上报 */
+            vision_emit(VISION_EV_TARGET_LOST, VISION_ZONE_NONE, msg.cmd,
+                        0U, VISION_REASON_NONE, 0U);
             break;
 
         case VISION_CMD_B_MIDLINE_RSP:
@@ -873,8 +752,11 @@ static void vision_rx_drain(void)
             zone = vision_response_zone(msg.cmd);
             if ((s_pending.kind == VISION_PEND_MIDLINE) && (s_pending.zone == zone))
             {
-                vision_emit(VISION_EV_MIDLINE, zone, msg.cmd,
-                            msg.data[0], VISION_REASON_NONE, 0U);
+                /* v1.6 §5.3：2 字节大端 int16 千分比，+ = 目标在画面中线右侧；
+                   0x8000 = 未检出（不是"居中"）。 */
+                const int16_t permille = (int16_t)vision_get_be16(&msg.data[0]);
+                vision_emit16(VISION_EV_MIDLINE, zone, msg.cmd,
+                              0U, VISION_REASON_NONE, 0U, permille);
                 vision_pending_clear();
             }
             else
@@ -931,6 +813,7 @@ static void vision_pending_service(uint32_t now)
         if ((s_pending.tx_count < VISION_LINK_SCAN_MAX_TX)
             && ((int32_t)(now - s_pending.next_tx_ms) >= 0))
         {
+            /* 0x10 是 LEN 0 的请求（v1.6 未改），与中位线/名次的 sel 无关 */
             ret = vision_update_send(s_pending.tx_cmd, NULL, 0U);
             if (ret == VISION_LINK_ERR_NO_BUDGET)
             {
@@ -970,7 +853,7 @@ static void vision_pending_service(uint32_t now)
 
         if ((int32_t)(now - s_pending.next_tx_ms) >= 0)
         {
-            ret = vision_update_send(s_pending.tx_cmd, NULL, 0U);
+            ret = vision_update_send(s_pending.tx_cmd, &s_pending.sel, 1U);
             if (ret == VISION_LINK_ERR_NO_BUDGET)
             {
                 break;
@@ -1002,66 +885,6 @@ static void vision_pending_service(uint32_t now)
     }
 }
 
-static void vision_track_service(uint32_t now)
-{
-    uint8_t idx;
-    uint32_t seq;
-
-    if (s_track_active == VISION_TRACK_NONE)
-    {
-        return;
-    }
-
-    idx = vision_track_index(s_track_active);
-    if (idx >= VISION_LINK_TRACK_SLOT_COUNT)
-    {
-        s_track_active = VISION_TRACK_NONE;
-        return;
-    }
-
-    taskENTER_CRITICAL();
-    seq = s_track[idx].seq;
-    taskEXIT_CRITICAL();
-
-    /* 新样本到达：清空丢失窗口，重新开始计时 */
-    if (seq != s_last_seen_seq)
-    {
-        s_last_seen_seq = seq;
-        s_loss_count = 0U;
-        s_loss_reported = 0U;
-        s_loss5_reported = 0U;
-        s_loss_next_ms = now + VISION_LINK_TRACK_LOSS_MS;
-        return;
-    }
-
-    if ((int32_t)(now - s_loss_next_ms) < 0)
-    {
-        return;
-    }
-
-    while (((int32_t)(now - s_loss_next_ms) >= 0)
-           && (s_loss_count < VISION_LINK_TRACK_LOSS_COUNT))
-    {
-        s_loss_count++;
-        s_loss_next_ms += VISION_LINK_TRACK_LOSS_MS;
-    }
-
-    if ((s_loss_count > 0U) && (s_loss_reported == 0U))
-    {
-        vision_emit(VISION_EV_TARGET_LOST, vision_track_zone(s_track_active),
-                    0U, 0U, VISION_REASON_TIMEOUT, 0U);
-        s_loss_reported = 1U;
-    }
-
-    if ((s_loss_count >= VISION_LINK_TRACK_LOSS_COUNT) && (s_loss5_reported == 0U))
-    {
-        vision_emit(VISION_EV_TRACK_LOST_5X, vision_track_zone(s_track_active),
-                    0U, VISION_LINK_TRACK_LOSS_COUNT, VISION_REASON_TIMEOUT, 0U);
-        s_loss5_reported = 1U;
-        /* 清 active，允许业务对同一目标重新 TrackStart */
-        s_track_active = VISION_TRACK_NONE;
-    }
-}
 
 static void vision_ack_flush(void)
 {
@@ -1144,14 +967,6 @@ void Vision_Link_Init(void)
     s_tx_busy = 0U;
     s_tx_progress_ms = 0U;
 
-    for (i = 0U; i < VISION_LINK_TRACK_SLOT_COUNT; i++)
-    {
-        s_track[i].dx_mm = 0;
-        s_track[i].dy_mm = 0;
-        s_track[i].tick_ms = 0U;
-        s_track[i].seq = 0U;
-    }
-
     for (i = 0U; i < VISION_ACK_WORDS; i++)
     {
         s_ack_mask[i] = 0U;
@@ -1163,8 +978,6 @@ void Vision_Link_Init(void)
     s_ever_online = 0U;
 
     vision_pending_clear();
-    s_track_active = VISION_TRACK_NONE;
-    vision_track_reset_loss();
 
     s_update_tx_left = 0U;
 
@@ -1188,7 +1001,6 @@ void Vision_Link_Update(void)
     vision_link_state_service(now);
     vision_rx_drain();
     vision_pending_service(now);
-    vision_track_service(now);
     vision_ack_flush();
 }
 
@@ -1241,7 +1053,7 @@ int Vision_Link_StartScan(Vision_Zone_e zone)
     {
         return VISION_LINK_ERR_OFFLINE;
     }
-    if ((s_pending.kind != VISION_PEND_NONE) || (s_track_active != VISION_TRACK_NONE))
+    if (s_pending.kind != VISION_PEND_NONE)
     {
         return VISION_LINK_ERR_BUSY;
     }
@@ -1249,7 +1061,7 @@ int Vision_Link_StartScan(Vision_Zone_e zone)
     return vision_send_raw(cmd, NULL, 0U);
 }
 
-int Vision_Link_RequestMidline(Vision_Zone_e zone)
+int Vision_Link_RequestMidline(Vision_Zone_e zone, uint8_t sel)
 {
     uint8_t cmd = vision_zone_cmd(zone, VISION_CMD_B_MIDLINE_REQ);
     uint32_t now;
@@ -1268,13 +1080,19 @@ int Vision_Link_RequestMidline(Vision_Zone_e zone)
         return VISION_LINK_ERR_BUSY;
     }
 
+    if (sel > 3U)
+    {
+        return VISION_LINK_ERR_ARG;
+    }
+
     now = HAL_GetTick();
-    ret = vision_send_raw(cmd, NULL, 0U);
+    ret = vision_send_raw(cmd, &sel, 1U);
     if (ret != VISION_LINK_OK)
     {
         return ret;
     }
 
+    s_pending.sel = sel;
     s_pending.kind = VISION_PEND_MIDLINE;
     s_pending.zone = (uint8_t)zone;
     s_pending.tx_cmd = cmd;
@@ -1309,7 +1127,7 @@ uint8_t Vision_Link_CancelPending(void)
     return 1U;
 }
 
-int Vision_Link_RequestOrder(Vision_Zone_e zone)
+int Vision_Link_RequestOrder(Vision_Zone_e zone, uint8_t sel)
 {
     uint8_t cmd = vision_zone_cmd(zone, VISION_CMD_B_ORDER_REQ);
     uint32_t now;
@@ -1328,13 +1146,19 @@ int Vision_Link_RequestOrder(Vision_Zone_e zone)
         return VISION_LINK_ERR_BUSY;
     }
 
+    if (sel > 3U)
+    {
+        return VISION_LINK_ERR_ARG;
+    }
+
     now = HAL_GetTick();
-    ret = vision_send_raw(cmd, NULL, 0U);
+    ret = vision_send_raw(cmd, &sel, 1U);
     if (ret != VISION_LINK_OK)
     {
         return ret;
     }
 
+    s_pending.sel = sel;
     s_pending.kind = VISION_PEND_ORDER;
     s_pending.zone = (uint8_t)zone;
     s_pending.tx_cmd = cmd;
@@ -1346,154 +1170,8 @@ int Vision_Link_RequestOrder(Vision_Zone_e zone)
     return VISION_LINK_OK;
 }
 
-int Vision_Link_TrackStart(Vision_TrackTarget_e target, uint16_t hz)
-{
-    uint8_t idx;
-    uint8_t cmd;
-    uint8_t data[2];
-    uint32_t now;
-    int ret;
 
-    idx = vision_track_index((uint8_t)target);
-    if (idx >= VISION_LINK_TRACK_SLOT_COUNT)
-    {
-        return VISION_LINK_ERR_ARG;
-    }
 
-    if (hz == 0U)
-    {
-        hz = VISION_LINK_TRACK_DEFAULT_HZ;
-    }
-    if (hz > VISION_LINK_TRACK_HZ_MAX)
-    {
-        return VISION_LINK_ERR_ARG;
-    }
-
-    if (Vision_Link_IsOnline() == 0U)
-    {
-        return VISION_LINK_ERR_OFFLINE;
-    }
-    if (s_pending.kind != VISION_PEND_NONE)
-    {
-        return VISION_LINK_ERR_BUSY;
-    }
-    if ((s_track_active != VISION_TRACK_NONE) && (s_track_active != (uint8_t)target))
-    {
-        return VISION_LINK_ERR_BUSY;
-    }
-    if (s_track_active == (uint8_t)target)
-    {
-        return VISION_LINK_OK;
-    }
-
-    cmd = vision_track_start_cmd((uint8_t)target);
-    data[0] = (uint8_t)(hz >> 8);
-    data[1] = (uint8_t)hz;
-
-    ret = vision_send_raw(cmd, data, 2U);
-    if (ret != VISION_LINK_OK)
-    {
-        return ret;
-    }
-
-    now = HAL_GetTick();
-    s_track_active = (uint8_t)target;
-
-    taskENTER_CRITICAL();
-    s_track[idx].dx_mm = 0;
-    s_track[idx].dy_mm = 0;
-    s_track[idx].tick_ms = 0U;
-    s_track[idx].seq = 0U;
-    taskEXIT_CRITICAL();
-
-    vision_track_reset_loss();
-    s_loss_next_ms = now + VISION_LINK_TRACK_LOSS_MS;
-
-    return VISION_LINK_OK;
-}
-
-int Vision_Link_TrackStop(Vision_TrackTarget_e target)
-{
-    uint8_t cmd;
-    int ret;
-
-    cmd = vision_track_stop_cmd((uint8_t)target);
-    if (cmd == 0U)
-    {
-        return VISION_LINK_ERR_ARG;
-    }
-    if (Vision_Link_IsOnline() == 0U)
-    {
-        return VISION_LINK_ERR_OFFLINE;
-    }
-    if ((s_track_active != VISION_TRACK_NONE) && (s_track_active != (uint8_t)target))
-    {
-        return VISION_LINK_ERR_STATE;
-    }
-
-    ret = vision_send_raw(cmd, NULL, 0U);
-    if (ret != VISION_LINK_OK)
-    {
-        return ret;
-    }
-
-    if (s_track_active == (uint8_t)target)
-    {
-        s_track_active = VISION_TRACK_NONE;
-        vision_track_reset_loss();
-    }
-
-    return VISION_LINK_OK;
-}
-
-uint8_t Vision_Link_GetTrack(Vision_TrackTarget_e target, Vision_TrackSample_t *out)
-{
-    uint8_t idx;
-    int16_t dx;
-    int16_t dy;
-    uint32_t tick;
-    uint32_t seq;
-    uint32_t now;
-
-    if ((out == NULL) || (s_track_active != (uint8_t)target))
-    {
-        return 0U;
-    }
-
-    idx = vision_track_index((uint8_t)target);
-    if (idx >= VISION_LINK_TRACK_SLOT_COUNT)
-    {
-        return 0U;
-    }
-
-    taskENTER_CRITICAL();
-    dx = s_track[idx].dx_mm;
-    dy = s_track[idx].dy_mm;
-    tick = s_track[idx].tick_ms;
-    seq = s_track[idx].seq;
-    taskEXIT_CRITICAL();
-
-    if ((seq == 0U) || (tick == 0U))
-    {
-        return 0U;
-    }
-
-    now = HAL_GetTick();
-    if ((uint32_t)(now - tick) >= VISION_LINK_TRACK_LOSS_MS)
-    {
-        return 0U;
-    }
-
-    out->dx_mm = dx;
-    out->dy_mm = dy;
-    out->tick_ms = tick;
-    out->seq = seq;
-    out->age_ms = (uint32_t)(now - tick);
-    out->target = (uint8_t)target;
-    out->valid = 1U;
-
-    return 1U;
-}
 
 uint8_t Vision_Link_TakeEvent(Vision_Event_t *ev)
 {

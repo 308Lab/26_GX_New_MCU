@@ -25,6 +25,10 @@
 #define MISSION_ORDER_WAIT_MS        (3500U)   /* 停车后等视觉名次，含 3 s 兜底 */
 #define MISSION_RANK_DIST_MM         (150)     /* 任务物品相对区域中间的前后距离 */
 #define MISSION_MIDLINE_SPEED_MMPS   (50.0f)   /* 中位线对准的低速连续移动速度 */
+/* v1.6：中位线回的是千分比偏移量，|offset| 小于死区即判「已对准」。
+   50‰ = 5% 画宽，与上位机 v1.5.1 时代的三态判据（±5% 视为居中）同源，
+   换成偏移量后判据不变，只是不再由视觉侧替 MCU 判。 */
+#define MISSION_MIDLINE_DEADBAND_PERM (50)
 #define MISSION_MIDLINE_PERIOD_MS    (500U)    /* 中位线请求周期 */
 #define MISSION_MIDLINE_NO_RESP      (3U)      /* 连续无响应窗口数上限 */
 #define MISSION_MIDLINE_TOTAL_MS     (5000U)   /* 对准总超时 */

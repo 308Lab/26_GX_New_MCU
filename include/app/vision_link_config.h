@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    app/vision_link_config.h
-  * @brief   视觉链路唯一参数出口（协议 v1.5.1）。
+  * @brief   视觉链路唯一参数出口（协议 v1.6）。
   *
   * 本文件只允许 .c 包含。USART3 PB10/PB11 115200 8N1 由 CubeMX 配置，
   * 此处不重复定义波特率。
@@ -12,16 +12,14 @@
 #define APP_VISION_LINK_CONFIG_H
 
 /* ===================== 1. 帧与队列 ===================== */
-/* 视觉->MCU 最大载荷：0x23/0x26/0x33/0x43 的 dx,dy（4B） */
+/* 视觉->MCU 最大载荷：v1.6 §5.1 的 0x11 扫码结果 ok,d1,d2,d3（4B） */
 #define VISION_LINK_MAX_RX_DATA              (4U)
-/* MCU->视觉 最大载荷：0x22/0x25/0x32/0x42 的 Hz（2B） */
+/* MCU->视觉 最大载荷：v1.6 §4.3 的 sel（1B）；留 1B 余量，帧长上限不变 */
 #define VISION_LINK_MAX_TX_DATA              (2U)
 /* 低频帧环形队列，必须是 2 的幂 */
 #define VISION_LINK_RX_QUEUE_LEN             (8U)
 /* 事件环形队列，必须是 2 的幂 */
 #define VISION_LINK_EVENT_QUEUE_LEN          (16U)
-/* 追踪最新值槽数量：B 物体 / B 桶 / C / D */
-#define VISION_LINK_TRACK_SLOT_COUNT         (4U)
 
 /* ===================== 2. 链路时序 ===================== */
 /* 协议 §1：连续 500ms 收不到视觉任何帧判失联 */
@@ -50,6 +48,7 @@
 #define VISION_LINK_SCAN_MAX_TX              (1U)
 /* 扫码：发出后 3s 仍无响应判失败 */
 #define VISION_LINK_SCAN_RESPONSE_TIMEOUT_MS (3000U)
+/* v1.6 §5.3 的「未检出」哨兵值定义在 vision_link.h（业务层也要用它判未检出） */
 /* 中位线：500ms 无回包重发，可反复请求 */
 #define VISION_LINK_MIDLINE_RETRY_MS         (500U)
 /* 审计 H6：中位线 pending 生命周期上限。上位机侧 midline_reply_ttl=500ms 且以同一周期
@@ -60,15 +59,6 @@
 /* 顺序判定：3s 无回包按 1=中兜底，不停车 */
 #define VISION_LINK_ORDER_TIMEOUT_MS         (3000U)
 #define VISION_LINK_ORDER_FALLBACK_VALUE     (1U)
-
-/* ===================== 4. 追踪 ===================== */
-/* 追踪：500ms 无偏移判丢 */
-#define VISION_LINK_TRACK_LOSS_MS            (500U)
-/* 连续 5 次丢失 -> 上报后由业务回展开态 */
-#define VISION_LINK_TRACK_LOSS_COUNT         (5U)
-/* 协议 §5.3：建议 50Hz */
-#define VISION_LINK_TRACK_DEFAULT_HZ         (50U)
-#define VISION_LINK_TRACK_HZ_MAX             (200U)
 
 /* ===================== 5. 协议命令号（v1.5.1） ===================== */
 #define VISION_CMD_HEARTBEAT                 (0xFEU)

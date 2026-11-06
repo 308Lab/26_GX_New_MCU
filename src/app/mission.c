@@ -32,8 +32,8 @@ static uint8_t  s_scan_result;   /* 0=等待 1=成功 2=错误 3=超时 */
 static uint8_t  s_order_ready;
 static uint8_t  s_rank_moving;
 static uint8_t  s_midline_got;
-static uint8_t  s_midline_result;
-static uint8_t  s_midline_last;
+static int16_t  s_midline_result;    /* v1.6：int16 千分比偏移量，VISION_LINK_MIDLINE_UNDETECTED = 未检出 */
+static int16_t  s_midline_last;      /* 最近一次判定（同样是偏移量） */
 static int8_t   s_midline_dir;      /* -1=后退 0=停 +1=前进 */
 static uint8_t  s_midline_no_resp;
 static uint32_t s_midline_start_ms;
@@ -42,10 +42,6 @@ static uint32_t s_midline_rx_count;
 static uint32_t s_midline_rx_seen;
 static int16_t  s_align_mm;        /* 首次对准基准之后累计的实际位移 */
 static uint8_t  s_align_accum;     /* 下一条 AUX_DONE 是否计入 s_align_mm */
-static uint8_t  s_conv;
-static uint8_t  s_track_retry;
-static uint8_t  s_track_lost;
-static uint8_t  s_b_demo;          /* 1 = B 追踪二次失败，改走演示动作 */
 static uint8_t  s_target_down;
 static uint8_t  s_path_done;
 static uint8_t  s_link_down;
@@ -59,9 +55,7 @@ static uint8_t  s_stop_after_a;
 static const uint16_t POSE_A_SCAN[3] __attribute__((unused)) = MISSION_POSE_A_SCAN;
 static const uint16_t POSE_COMMON[3] = MISSION_POSE_COMMON_OPEN;
 static const uint16_t POSE_B[3]      = MISSION_POSE_B_PRESET;
-static const uint16_t POSE_B_DEMO[3] = MISSION_POSE_B_DEMO;
 static const uint16_t POSE_B_BUCKET[3] = MISSION_POSE_B_BUCKET;
-static const uint16_t POSE_B_BUCKET_DEMO[3] = MISSION_POSE_B_BUCKET_DEMO;
 static const uint16_t POSE_C[3]      = MISSION_POSE_C_PRESET;
 static const uint16_t POSE_D[3]      = MISSION_POSE_D_PRESET;
 static const uint16_t POSE_STOW[3]   = MISSION_POSE_STOW;
@@ -94,14 +88,11 @@ static void mission_enter(Mission_State_e st)
     s_sub_ms = HAL_GetTick();
     s_state_ms = HAL_GetTick();
     s_t_ms = HAL_GetTick();
-    s_conv = 0U;
-    s_track_retry = 0U;
-    s_b_demo = 0U;
     s_order_ready = 0U;
     s_rank_moving = 0U;
     s_midline_got = 0U;
-    s_midline_result = 0U;
-    s_midline_last = 0U;
+    s_midline_result = VISION_LINK_MIDLINE_UNDETECTED;
+    s_midline_last = VISION_LINK_MIDLINE_UNDETECTED;
     s_midline_dir = 0;
     s_midline_no_resp = 0U;
     s_align_mm = 0;
@@ -152,7 +143,7 @@ static void mission_pump(void)
             if (s_degraded == 0U)
             {
                 (void)Vision_Link_StartScan(zone_of(pe.point_id));
-                (void)Vision_Link_RequestOrder(zone_of(pe.point_id));
+                (void)Vision_Link_RequestOrder(zone_of(pe.point_id), 0U);
             }
             break;
 
@@ -201,7 +192,8 @@ static void mission_pump(void)
             break;
 
         case VISION_EV_MIDLINE:
-            s_midline_result = ve.value;
+            /* v1.6 §5.3：偏移量在 value16（千分比，+ = 目标在中线右侧） */
+            s_midline_result = ve.value16;
             s_midline_got = 1U;
             s_midline_rx_count++;
             break;
@@ -221,7 +213,7 @@ static void mission_pump(void)
             break;
 
         case VISION_EV_TRACK_LOST_5X:
-            s_track_lost = 1U;
+            /* v1.6 取消追踪帧，视觉不再产生这个事件；保留分支只为兼容旧固件回包 */
             break;
 
         case VISION_EV_C_TARGET_DOWN:
@@ -241,57 +233,6 @@ static void mission_pump(void)
             break;
         }
     }
-}
-
-/* ===================== 追踪闭环 ===================== */
-/* 返回 0=进行中，1=收敛，-1=失败 */
-
-static int mission_track_step(Vision_TrackTarget_e target, uint16_t timeout_ms)
-{
-    Vision_TrackSample_t ts;
-
-    if (s_track_lost != 0U)
-    {
-        s_track_lost = 0U;
-        (void)Vision_Link_TrackStop(target);
-        return -1;
-    }
-
-    if ((HAL_GetTick() - s_sub_ms) > timeout_ms)
-    {
-        (void)Vision_Link_TrackStop(target);
-        return -1;
-    }
-
-    if (Arm_IsBusy() != 0U)
-    {
-        return 0;
-    }
-
-    if (Vision_Link_GetTrack(target, &ts) == 0U || ts.valid == 0U)
-    {
-        s_conv = 0U;
-        return 0;
-    }
-
-    if (abs((int)ts.dx_mm) <= MISSION_TRACK_TOL_MM
-        && abs((int)ts.dy_mm) <= MISSION_TRACK_TOL_MM)
-    {
-        s_conv++;
-        if (s_conv >= MISSION_TRACK_CONV_SAMPLES)
-        {
-            (void)Vision_Link_TrackStop(target);
-            s_conv = 0U;
-            return 1;
-        }
-    }
-    else
-    {
-        s_conv = 0U;
-        (void)Arm_NudgeTool(ts.dx_mm, ts.dy_mm, 2000U);
-    }
-
-    return 0;
 }
 
 /* ===================== 底盘到桶 ===================== */
@@ -366,7 +307,7 @@ static void mission_request_order(Vision_Zone_e zone, uint32_t now)
     s_order_ready = 0U;
     s_rank = 1U;
 
-    if (Vision_Link_RequestOrder(zone) == VISION_LINK_OK)
+    if (Vision_Link_RequestOrder(zone, 0U) == VISION_LINK_OK)
     {
         s_t_ms = now + MISSION_ORDER_WAIT_MS;
     }
@@ -379,12 +320,20 @@ static void mission_request_order(Vision_Zone_e zone, uint32_t now)
 
 /* ===================== 中位线对准 ===================== */
 /*
- * 协议 0x21/0x31/0x41：0=未检出 1=已进入中位线范围 2=偏左 3=偏右。
- * 方向已确认：2（偏左）后退、3（偏右）前进。
+ * 协议 v1.6 §5.3：0x21/0x31/0x41 回的是 **int16 大端千分比偏移量**
+ *   offset = (u_target - W/2) / (W/2) * 1000，正 = 目标在画面中线右侧，量程 ±1000；
+ *   0x8000 = 未检出。
+ *
+ * 方向沿用现场验证过的映射：目标偏左（offset < 0）→ 车后退，偏右 → 前进。
+ * 判据：|offset| <= MISSION_MIDLINE_DEADBAND_PERM(50‰) 即「已对准」——
+ *   以前这个判据在视觉侧（三态里的 1），现在由 MCU 自己判，视觉只回原始偏移量。
+ *
+ * ★ 未检出与「居中」必须分开：0 是合法的「正好居中」，0x8000 才是「没看见」。
+ *   没看见就停车等下一帧，绝不能把上一帧的方向继续跑下去 —— 那是盲开。
+ *
  * 每 500 ms 发一帧请求，底盘按最近判定以 MISSION_MIDLINE_SPEED_MMPS 连续低速移动；
  * 5 s 总超时或连续 3 个窗口无响应即原地停车，继续任务。
- * 停止时路径层 AUX_DONE 回传实际位移，记入 s_align_mm 仅作记录；
- * 到桶等主换算仍使用 rank ±150，不受中位线微调影响。
+ * 停止时路径层 AUX_DONE 回传实际位移，记入 s_align_mm 仅作记录。
  */
 
 /* 让底盘以低速连续前后运动；dir: -1=后退 0=停 +1=前进
@@ -431,8 +380,8 @@ static void mission_midline_drive(int8_t dir)
 static void mission_midline_start(Vision_Zone_e zone, uint32_t now)
 {
     s_midline_got = 0U;
-    s_midline_result = 0U;
-    s_midline_last = 0U;
+    s_midline_result = VISION_LINK_MIDLINE_UNDETECTED;
+    s_midline_last = VISION_LINK_MIDLINE_UNDETECTED;
     s_midline_dir = 0;
     s_midline_no_resp = 0U;
     s_midline_rx_count = 0U;
@@ -440,20 +389,27 @@ static void mission_midline_start(Vision_Zone_e zone, uint32_t now)
     s_midline_start_ms = now;
     s_midline_next_ms = now + MISSION_MIDLINE_PERIOD_MS;
 
-    (void)Vision_Link_RequestMidline(zone);
+    (void)Vision_Link_RequestMidline(zone, 0U);
 }
 
 /* 返回 0=仍在对准，1=已对准或放弃 */
 static int mission_midline_step(Vision_Zone_e zone, uint32_t now)
 {
-    /* 新结果立即生效：1 表示已进入中位线范围 */
+    /* 新结果立即生效 */
     if (s_midline_got != 0U)
     {
         s_midline_got = 0U;
         s_midline_last = s_midline_result;
 
-        if (s_midline_last == 1U)
+        if (s_midline_last == VISION_LINK_MIDLINE_UNDETECTED)
         {
+            /* 没看见：停车等下一帧。绝不能沿用上一帧的方向继续走。 */
+            mission_midline_drive(0);
+        }
+        else if ((s_midline_last <= MISSION_MIDLINE_DEADBAND_PERM)
+                 && (s_midline_last >= -MISSION_MIDLINE_DEADBAND_PERM))
+        {
+            /* 进入死区 = 已对准，由 MCU 判，不再等视觉给三态 1 */
             mission_midline_drive(0);
             (void)Vision_Link_CancelMidline();
             return 1;
@@ -490,22 +446,26 @@ static int mission_midline_step(Vision_Zone_e zone, uint32_t now)
         }
 
         (void)Vision_Link_CancelMidline();
-        (void)Vision_Link_RequestMidline(zone);
+        (void)Vision_Link_RequestMidline(zone, 0U);
         s_midline_next_ms = now + MISSION_MIDLINE_PERIOD_MS;
     }
 
-    /* 按最近一次判定维持低速连续运动，对准后由上方的 1 停车 */
-    if (s_midline_last == 2U)
+    /* 按最近一次判定维持低速连续运动 */
+    if (s_midline_last == VISION_LINK_MIDLINE_UNDETECTED)
     {
-        mission_midline_drive(-1);
+        mission_midline_drive(0);
     }
-    else if (s_midline_last == 3U)
+    else if (s_midline_last > MISSION_MIDLINE_DEADBAND_PERM)
     {
-        mission_midline_drive(1);
+        mission_midline_drive(1);          /* 目标在右 → 前进 */
+    }
+    else if (s_midline_last < -MISSION_MIDLINE_DEADBAND_PERM)
+    {
+        mission_midline_drive(-1);         /* 目标在左 → 后退 */
     }
     else
     {
-        mission_midline_drive(0);
+        mission_midline_drive(0);          /* 死区内：停稳等收敛 */
     }
 
     return 0;
@@ -622,81 +582,11 @@ static void mission_run_b(uint32_t now)
         s_sub = 34U;
         break;
 
-    case 34U: /* 名次到位后的中位线复核 */
+    case 34U: /* 名次到位后的中位线复核（v1.6：追踪帧废止，这是对臂/打靶前最后一次横向对准） */
         if (mission_midline_step(VISION_ZONE_B, now) == 0) break;
         (void)Arm_MovePwm(POSE_B, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 3U;
-        break;
-
-    case 3U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Vision_Link_TrackStart(VISION_TRACK_B_OBJECT, 50U);
-        s_sub_ms = now;
-        s_t_ms = now + 100U;
-        s_sub = 4U;
-        break;
-
-    case 4U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        {
-            int r = mission_track_step(VISION_TRACK_B_OBJECT, MISSION_TRACK_TIMEOUT_MS);
-            if (r > 0)
-            {
-                s_sub = 5U;
-            }
-            else if (r < 0)
-            {
-                if (s_track_retry < MISSION_TRACK_RETRY)
-                {
-                    s_track_retry++;
-                    (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
-                    s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
-                    s_sub = 9U;   /* 回到 case 9 前的重粗调入口 */
-                }
-                else
-                {
-                    /* 第二次仍失败：B 剩余流程全部改走演示动作 */
-                    s_b_demo = 1U;
-                    (void)Arm_MovePwm(POSE_B_DEMO, MISSION_ARM_MS);
-                    s_t_ms = now + MISSION_ARM_MS;
-                    s_sub = 23U;
-                }
-            }
-            else
-            {
-                s_t_ms = now + 100U;
-            }
-        }
-        break;
-
-    case 9U:  /* 重粗调：回展开后重新预存并重发追踪 */
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_MovePwm(POSE_B, MISSION_ARM_MS);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 10U;
-        break;
-
-    case 10U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Vision_Link_TrackStart(VISION_TRACK_B_OBJECT, 50U);
-        s_sub_ms = now;
-        s_t_ms = now + 100U;
-        s_sub = 4U;
-        break;
-
-    case 23U: /* 演示抓取：等取球位姿动作完成 */
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_Grasp();
-        s_t_ms = now + MISSION_GRIP_MS;
-        s_sub = 24U;
-        break;
-
-    case 24U: /* 演示抓取后回展开，继续正式放桶流程 */
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
-        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
-        s_sub = 11U;
+        s_sub = 5U;
         break;
 
     case 5U:  /* 下降抓取 */
@@ -752,7 +642,7 @@ static void mission_run_b(uint32_t now)
         if ((int32_t)(now - s_t_ms) < 0) break;
         (void)Arm_MoveBaseRelative(-180.0f);
         s_t_ms = now + MISSION_J1_180_MS + MISSION_GAP_MS;
-        s_sub = (s_b_demo != 0U) ? 25U : 13U;
+        s_sub = 13U;
         break;
 
     case 13U:
@@ -760,50 +650,6 @@ static void mission_run_b(uint32_t now)
         (void)Arm_MovePwm(POSE_B_BUCKET, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS;
         s_sub = 14U;
-        break;
-
-    case 25U: /* 演示放桶位 */
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_MovePwm(POSE_B_BUCKET_DEMO, MISSION_ARM_MS);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 26U;
-        break;
-
-    case 26U: /* 演示张开（释放） */
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_Release();
-        s_t_ms = now + MISSION_GRIP_MS;
-        s_sub = 27U;
-        break;
-
-    case 27U: /* 演示放完后回展开，随后 J1 回正 */
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
-        s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
-        s_sub = 20U;
-        break;
-
-    case 14U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Vision_Link_TrackStart(VISION_TRACK_B_BUCKET, 50U);
-        s_sub_ms = now;
-        s_t_ms = now + 100U;
-        s_sub = 15U;
-        break;
-
-    case 15U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        {
-            int r = mission_track_step(VISION_TRACK_B_BUCKET, MISSION_TRACK_TIMEOUT_MS);
-            if (r != 0)
-            {
-                s_sub = 16U;   /* 失败也按名义桶位放置 */
-            }
-            else
-            {
-                s_t_ms = now + 100U;
-            }
-        }
         break;
 
     case 16U:
@@ -902,68 +748,13 @@ static void mission_run_c(uint32_t now)
         s_sub = 34U;
         break;
 
-    case 34U: /* 名次到位后的中位线复核 */
+    case 34U: /* 名次到位后的中位线复核（v1.6：追踪帧废止，这是对臂/打靶前最后一次横向对准） */
         if (mission_midline_step(VISION_ZONE_C, now) == 0) break;
         (void)Arm_MovePwm(POSE_C, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 3U;
+        s_sub = 5U;
         break;
 
-    case 3U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Vision_Link_TrackStart(VISION_TRACK_C, 50U);
-        s_sub_ms = now;
-        s_t_ms = now + 200U;
-        s_conv = 0U;
-        s_sub = 4U;
-        break;
-
-    case 4U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        if (s_servo_busy != 0U) break;
-        {
-            Vision_TrackSample_t ts;
-            /* 修复：原实现把超时判断写在「拿到有效样本」的分支里。视觉一旦不再回 0x33
-               （失联 / 目标丢失 / 追踪被停），既不会收敛也永远不会超时，case 4 只能等
-               外层 MISSION_C_TASK_MS(60s) 兜底 —— 激光始终不开，C 任务实质失败。 */
-            const uint8_t have = (Vision_Link_GetTrack(VISION_TRACK_C, &ts) != 0U)
-                                 && (ts.valid != 0U);
-
-            if (have != 0U)
-            {
-                if (abs((int)ts.dy_mm) <= MISSION_SERVO_TOL_MM)
-                {
-                    s_conv++;
-                }
-                else
-                {
-                    s_conv = 0U;
-                    {
-                        int16_t fwd = (int16_t)(MISSION_C_SERVO_K * (float)ts.dy_mm);
-                        if (fwd > MISSION_SERVO_STEP_MAX_MM)  fwd = MISSION_SERVO_STEP_MAX_MM;
-                        if (fwd < -MISSION_SERVO_STEP_MAX_MM) fwd = -MISSION_SERVO_STEP_MAX_MM;
-                        if (fwd != 0 && Chassis_Path_ServoStep(fwd, 0) == 0)
-                        {
-                            s_servo_busy = 1U;
-                        }
-                    }
-                }
-            }
-
-            s_t_ms = now + 200U;
-
-            /* 收敛与超时都在样本判断之外：没有样本一样要能退出 */
-            if ((s_conv >= MISSION_TRACK_CONV_SAMPLES)
-                || ((uint32_t)(now - s_sub_ms) > MISSION_TRACK_TIMEOUT_MS))
-            {
-                (void)Vision_Link_TrackStop(VISION_TRACK_C);
-                s_conv = 0U;
-                /* 就位后停 2 s 再开激光（覆盖上面的 200 ms 轮询间隔） */
-                s_t_ms = now + MISSION_GAP_MS;
-                s_sub = 5U;
-            }
-        }
-        break;
 
     case 5U:
         if ((int32_t)(now - s_t_ms) < 0)
@@ -1059,63 +850,11 @@ static void mission_run_d(uint32_t now)
         s_sub = 34U;
         break;
 
-    case 34U: /* 名次到位后的中位线复核 */
+    case 34U: /* 名次到位后的中位线复核（v1.6：追踪帧废止，这是对臂/打靶前最后一次横向对准） */
         if (mission_midline_step(VISION_ZONE_D, now) == 0) break;
         (void)Arm_MovePwm(POSE_D, MISSION_ARM_MS);
         s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 3U;
-        break;
-
-    case 3U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Vision_Link_TrackStart(VISION_TRACK_D, 50U);
-        s_sub_ms = now;
-        s_t_ms = now + 100U;
-        s_sub = 4U;
-        break;
-
-    case 4U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        {
-            int r = mission_track_step(VISION_TRACK_D, MISSION_TRACK_TIMEOUT_MS);
-            if (r > 0)
-            {
-                s_sub = 5U;
-            }
-            else if (r < 0)
-            {
-                if (s_track_retry < MISSION_TRACK_RETRY)
-                {
-                    s_track_retry++;
-                    (void)Arm_MovePwm(POSE_COMMON, MISSION_ARM_MS);
-                    s_t_ms = now + MISSION_ARM_MS + MISSION_GAP_MS;
-                    s_sub = 9U;
-                }
-                else
-                {
-                    s_sub = 5U;
-                }
-            }
-            else
-            {
-                s_t_ms = now + 100U;
-            }
-        }
-        break;
-
-    case 9U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Arm_MovePwm(POSE_D, MISSION_ARM_MS);
-        s_t_ms = now + MISSION_ARM_MS;
-        s_sub = 10U;
-        break;
-
-    case 10U:
-        if ((int32_t)(now - s_t_ms) < 0) break;
-        (void)Vision_Link_TrackStart(VISION_TRACK_D, 50U);
-        s_sub_ms = now;
-        s_t_ms = now + 100U;
-        s_sub = 4U;
+        s_sub = 5U;
         break;
 
     case 5U:
