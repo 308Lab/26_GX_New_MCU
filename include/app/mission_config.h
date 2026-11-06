@@ -32,12 +32,10 @@
 #define MISSION_MIDLINE_PERIOD_MS    (500U)    /* 中位线请求周期 */
 #define MISSION_MIDLINE_NO_RESP      (3U)      /* 连续无响应窗口数上限 */
 #define MISSION_MIDLINE_TOTAL_MS     (5000U)   /* 对准总超时 */
-#define MISSION_TRACK_TIMEOUT_MS     (5000U)   /* 单个追踪闭环 */
-#define MISSION_TRACK_RETRY          (1U)      /* 追踪失败重粗调次数 */
-#define MISSION_TRACK_CONV_SAMPLES   (3U)      /* 连续收敛样本数 */
-#define MISSION_TRACK_TOL_MM         (5)       /* 收敛阈值 */
-#define MISSION_SERVO_STEP_MAX_MM    (20)      /* C 底盘单步限幅 */
-#define MISSION_SERVO_TOL_MM         (3)       /* C 伺服收敛阈值 */
+
+/* v1.6 废止追踪帧（0x22-0x27/0x32-0x34/0x42-0x44），
+   MISSION_TRACK_* 与 C 段底盘伺服（MISSION_SERVO_*）一并退役：
+   横向闭环改由 0x21 的偏移量承担，纵向靠名次位移。 */
 
 /* ===================== 3. 任务阶段超时 ===================== */
 #define MISSION_A_TRAVEL_MS          (40000U)
@@ -48,7 +46,6 @@
 #define MISSION_TOTAL_MS             (270000U)
 
 /* ===================== 4. 底盘伺服 ===================== */
-#define MISSION_C_SERVO_K            (1.0f)    /* dy -> 前后 mm，占位 */
 #define MISSION_C_SERVO_STEP_MS      (2000U)
 
 /* ===================== 5. 预存位（PWM，ID1/ID2/ID3） =====================
