@@ -209,10 +209,7 @@ static uint8_t vision_ack_exempt(uint8_t cmd)
 {
     switch (cmd)
     {
-    case VISION_CMD_B_TRACK_OFFSET:
-    case VISION_CMD_B_BUCKET_OFFSET:
-    case VISION_CMD_C_TRACK_OFFSET:
-    case VISION_CMD_D_TRACK_OFFSET:
+    /* v1.6 废止追踪偏移帧（0x23/0x26/0x33/0x43），视觉不再发送，这里也不再放行 */
     case VISION_CMD_HEARTBEAT:
     case VISION_CMD_ACK:
         return 1U;
